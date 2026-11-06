@@ -32,6 +32,7 @@ struct Index {
   @State cmdText: string = '';
   @State canvasFocused: boolean = false;
   @State lastPinch: number = 1;
+  @State frameMs: string = '';
   private settings: RenderingContextSettings = new RenderingContextSettings(false);
   private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
   private pixelMap: image.PixelMap | null = null;
@@ -52,6 +53,20 @@ struct Index {
     // 10 Hz poll: prompt/log/epoch changes plus redraws when dirty. Interaction events
     // also mark dirty for an immediate refresh at the next tick.
     this.timerId = setInterval(() => this.tick(), 100);
+    this.loadBenchmarkDrawing();
+  }
+
+  /** Dev benchmark: load the packed thunder.dxf (rawfile) at startup. Keep small. */
+  private async loadBenchmarkDrawing(): Promise<void> {
+    try {
+      const raw: Uint8Array =
+        await getContext(this).resourceManager.getRawFileContent('thunder.dxf');
+      const buf: ArrayBuffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+      this.applyState(Cad.openDxf('thunder.dxf', buf));
+      this.dirty = true;
+    } catch (e) {
+      // No thunder.dxf packed in this build — start on the empty drawing.
+    }
   }
 
   aboutToDisappear(): void {
@@ -77,9 +92,12 @@ struct Index {
     if (state.log.length > 0) {
       this.log = state.log.slice(-8);
     }
+    if (state.frameMs !== undefined && state.frameMs > 0) {
+      this.frameMs = `渲染 ${state.frameMs.toFixed(0)}ms`;
+    }
     const view: CadView = state.view;
     this.status =
-      `视图高 ${view.height.toFixed(2)} | 中心 (${view.center[0].toFixed(2)}, ${view.center[1].toFixed(2)})`;
+      `视图高 ${view.height.toFixed(2)} | 中心 (${view.center[0].toFixed(2)}, ${view.center[1].toFixed(2)}) | ${this.frameMs}`;
   }
 
   // ---------------- canvas ----------------
@@ -214,6 +232,15 @@ struct Index {
       this.keyword('undo');
     } else if (this.ctrlHeld && event.keyCode === KeyCode.KEYCODE_Y) {
       this.keyword('redo');
+    } else if (event.keyCode === KeyCode.KEYCODE_PLUS || event.keyCode === KeyCode.KEYCODE_NUMPAD_ADD) {
+      // +/- zoom about the canvas centre (also the uitest-injectable benchmark entry).
+      const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
+      this.applyState(Cad.zoom(1.25, p[0], p[1]));
+      this.dirty = true;
+    } else if (event.keyCode === KeyCode.KEYCODE_MINUS || event.keyCode === KeyCode.KEYCODE_NUMPAD_SUBTRACT) {
+      const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
+      this.applyState(Cad.zoom(0.8, p[0], p[1]));
+      this.dirty = true;
     }
   }
 
@@ -382,7 +409,7 @@ struct Index {
         this.menuBar()
 
         // Canvas: click to pick, middle-drag / two-finger pan, pinch zoom, right-click menu.
-        Column() {
+        Stack({ alignContent: Alignment.BottomEnd }) {
           Canvas(this.context)
             .width('100%')
             .height('100%')
@@ -404,6 +431,33 @@ struct Index {
             .bindContextMenu(this.canvasMenu, ResponseType.RightClick)
             .gesture(PinchGesture({ fingers: 2 })
               .onActionUpdate((event: GestureEvent) => this.handlePinch(event)))
+          // 触屏/注入用缩放钮：+ / − / 缩放范围（键鼠走滚轮与右键菜单）。
+          Column({ space: 6 }) {
+            Button('+')
+              .width(34).height(34).fontSize(18)
+              .backgroundColor(PANEL).fontColor('#dfe6ee')
+              .onClick(() => {
+                const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
+                this.applyState(Cad.zoom(1.25, p[0], p[1]));
+                this.dirty = true;
+              })
+            Button('−')
+              .width(34).height(34).fontSize(18)
+              .backgroundColor(PANEL).fontColor('#dfe6ee')
+              .onClick(() => {
+                const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
+                this.applyState(Cad.zoom(0.8, p[0], p[1]));
+                this.dirty = true;
+              })
+            Button('⌂')
+              .width(34).height(34).fontSize(14)
+              .backgroundColor(PANEL).fontColor('#dfe6ee')
+              .onClick(() => {
+                this.applyState(Cad.zoomExtents());
+                this.dirty = true;
+              })
+          }
+          .margin(10)
         }
         .layoutWeight(1)
 

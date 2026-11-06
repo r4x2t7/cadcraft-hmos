@@ -25,6 +25,7 @@ export interface CadState {
   ok: boolean;
   error?: string;
   epoch: number;
+  frameMs?: number;
   prompting: boolean;
   prompt: CadPrompt | null;
   view: CadView;

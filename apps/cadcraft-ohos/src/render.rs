@@ -6,6 +6,7 @@ use crate::app::App;
 /// Render the current view. Returns premultiplied RGBA_8888 bytes (the background is
 /// opaque, so premultiplied equals straight), row-major top-left origin, no padding.
 pub fn frame(app: &mut App) -> Vec<u8> {
+    let started = std::time::Instant::now();
     let Ok(st) = app.session.state() else { return Vec::new() };
     let view = st.view();
     let (center, height) = (view.center, view.height);
@@ -49,8 +50,12 @@ pub fn frame(app: &mut App) -> Vec<u8> {
             for px in bytes.chunks_exact_mut(4) {
                 px.swap(0, 2);
             }
+            app.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
             bytes
         }
-        None => Vec::new(),
+        None => {
+            app.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
+            Vec::new()
+        }
     }
 }

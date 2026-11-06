@@ -1,10 +1,11 @@
 {
   "app": {
-    // 包名在 App 备案与 AGC 建应用后就锁死：改成你自己的反域名再走备案。
-    "bundleName": "io.github.r4x2t7.coffeecad",
+    // 包名在 App 备案与 AGC 建应用后就锁死。本仓库按上架版走 io.github.r4x2t7.hocad；
+    // 纯开源构建可改成 io.github.storytold.cadcraft.hmos（对齐 photocraft-hmos 的双轨模式）。
+    "bundleName": "io.github.r4x2t7.hocad",
     "vendor": "jiwei",
     "versionCode": 10000000,
-    "versionName": "0.17.0-harmony.1",
+    "versionName": "0.17.0-hmos.1",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }

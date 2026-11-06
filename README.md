@@ -1,12 +1,27 @@
-# 咖啡CAD（CoffeeCAD）— CADCraft 的原生鸿蒙移植
+# CADCraft For HarmonyOS（应用名 **HoCAD**）
 
-> 本仓库是 [storytold/cadcraft](https://github.com/storytold/cadcraft) 的**硬分叉**（hard fork）：
-> 把 CADCraft 移植为 **HarmonyOS / 鸿蒙 PC（2in1）原生应用**——ArkUI 壳 + Rust 引擎
-> Node-API 模块（`apps/cadcraft-ohos`）+ CPU 软渲染（`packaging/harmony`），构建与上架见
+[![ArkTS](https://img.shields.io/badge/UI-ArkTS%20%2F%20ETS-blue)](https://developer.huawei.com/consumer/cn/arkts/)
+[![Rust](https://img.shields.io/badge/native-Rust-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Platform](https://img.shields.io/badge/platform-HarmonyOS%202in1-blue)](https://www.harmonyos.com/)
+[![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-black)](NOTICE)
+
+**HoCAD**（应用简称，仓库 `cadcraft-hmos`）是面向 HarmonyOS / 鸿蒙 PC（2in1）的
+**计算机辅助设计与绘图应用**——CAD 宠物项目级移植：命令行、对象捕捉、图层、标注、填充、
+块与 DXF 图纸，跑在 ArkUI 壳 + Rust 引擎（Node-API）+ CPU 软渲染上。
+
+> [!NOTE]
+> 本仓库为个人对 [CADCraft](https://github.com/storytold/cadcraft) 的鸿蒙移植（hard fork），
+> **与上游 CADCraft / ArtCraft 团队无关**，未获其官方支持或背书。移植与维护：**霁伪**
+> （[r4x2t7](https://github.com/r4x2t7)）。当前 `main` 基于上游 **v0.17.0**（`Cargo.toml`
+> `workspace.package.version`），通过 `git fetch upstream && git merge upstream/main`
+> 持续合并上游；全部修改记录在 git 历史。
+
+> [!TIP]
+> 计划以 **HoCAD** 之名上架华为应用市场（对齐 [photocraft-hmos](https://github.com/MXJinjing/photocraft-hmos)
+> → ArtForge Photo 的双轨模式）：上架包名 `io.github.r4x2t7.hocad`，纯开源构建包名可用
+> `io.github.storytold.cadcraft.hmos`。许可不变：MIT OR Apache-2.0
+> （`LICENSE-MIT` / `LICENSE-APACHE` / `NOTICE`）。构建与上架：
 > [packaging/harmony/README.md](packaging/harmony/README.md)。
-> 移植与维护：**霁伪**（[r4x2t7](https://github.com/r4x2t7)）。
-> 协议不变：MIT OR Apache-2.0（`LICENSE-MIT` / `LICENSE-APACHE` / `NOTICE`）；上游改动通过
-> `git fetch upstream && git merge upstream/main` 持续合并进来，全部改动见 git 历史。
 
 ---
 

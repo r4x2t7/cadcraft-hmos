@@ -3,14 +3,14 @@ Copyright (c) 2026 ArtCraft Team and the CADCraft contributors.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option
 (LICENSE-MIT, LICENSE-APACHE).
 
-HarmonyOS port — 咖啡CAD (CoffeeCAD)
-------------------------------------
-The HarmonyOS (OpenHarmony / 2in1) port is maintained by 霁伪 (JiWei,
+HarmonyOS port — HoCAD
+----------------------
+The HarmonyOS (OpenHarmony / 2in1) port "HoCAD" is maintained by 霁伪 (JiWei,
 https://github.com/r4x2t7). The port additions (apps/cadcraft-ohos, packaging/harmony)
 are new files under the same MIT License or the Apache License, Version 2.0, at your
 option; Copyright (c) 2026 霁伪 (JiWei). Everything else is carried over from CADCraft;
 every modification relative to upstream is tracked in the git history.
-鸿蒙移植部分（apps/cadcraft-ohos、packaging/harmony）由霁伪维护，
+鸿蒙移植部分（apps/cadcraft-ohos、packaging/harmony，应用名 HoCAD）由霁伪维护，
 遵循相同的 MIT / Apache-2.0 双许可；其余文件沿用 CADCraft，全部修改记录于 git 历史。
 
 The ArtCraft name, wordmark and logos in docs/brand/ are trademarks of the ArtCraft Team. They are

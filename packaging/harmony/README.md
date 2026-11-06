@@ -1,15 +1,17 @@
-# 咖啡CAD for HarmonyOS PC (鸿蒙电脑 / 2in1)
+# HoCAD for HarmonyOS（鸿蒙电脑 / 2in1）
 
-**咖啡CAD**（CoffeeCAD）——基于 [storytold/cadcraft](https://github.com/storytold/cadcraft)
+**HoCAD** —— 基于 [storytold/cadcraft](https://github.com/storytold/cadcraft)
 （CADCraft，MIT OR Apache-2.0）移植的**原生鸿蒙 CAD 应用**：**ArkUI 壳 + Rust 引擎
 Node-API 模块 + CPU 软渲染**。移植与维护：**霁伪**（[r4x2t7](https://github.com/r4x2t7)）。
-许可与署名见根目录 `LICENSE-MIT` / `LICENSE-APACHE` / `NOTICE`；对上游的全部修改记录在
-git 历史，上游更新用下面的同步命令持续合并。
+命名与双轨模式对齐 [photocraft-hmos](https://github.com/MXJinjing/photocraft-hmos)
+（上架名 HoCAD / 包名 `io.github.r4x2t7.hocad`；纯开源构建可改
+`io.github.storytold.cadcraft.hmos`）。许可与署名见根目录 `LICENSE-MIT` / `LICENSE-APACHE`
+/ `NOTICE`；对上游的全部修改记录在 git 历史，上游更新用下面的同步命令持续合并。
 
 ## 持续合并上游（cadcraft）
 
 ```bash
-git remote -v                  # origin = 你的 coffeecad 仓库, upstream = storytold/cadcraft
+git remote -v                  # hmos = r4x2t7/cadcraft-hmos, upstream = storytold/cadcraft
 git fetch upstream
 git merge upstream/main        # 建议跟随上游 release（或每月）合并一次
 ```
@@ -53,7 +55,7 @@ apps/cadcraft-ohos/            Rust Node-API 模块（真 ohos target cargo chec
   src/render.rs                DisplayList → tiny-skia → RGBA 帧
   src/lib.rs                   napi_module 注册 + 16 个导出
 packaging/harmony/             DevEco Studio 工程（本目录）
-  AppScope/app.json5           bundleName: io.github.r4x2t7.coffeecad（备案前改成你自己的反域名）
+  AppScope/app.json5           bundleName: io.github.r4x2t7.hocad（上架版；开源版可改 io.github.storytold.cadcraft.hmos）
   build-profile.json5          compatibleSdkVersion 5.0.2(13)，覆盖全部 2in1 机型
   entry/src/main/module.json5  deviceTypes: ["2in1", "tablet"]
   entry/src/main/ets/pages/Index.ets   PC 壳：菜单栏 / Tool Sets / 画布 / 命令行 / 状态栏
@@ -115,10 +117,10 @@ Build > Build Hap(s)/APP(s)。原生 so 由 `entry/libs/arm64-v8a/` 自动打包
    `ai.storyteller.cadcraft` 与签名证书信息要一致），AGC 提交审核时会校验。视类目可能需要
    计算机软件著作权登记证书，提前备好。
 3. **创建应用**：AGC 控制台 > 我的项目 > 创建应用（应用类型 App，包名与 app.json5 一致）。
-4. **命名过审（应用名"咖啡CAD"）**：
-   - AGC 提交时查重，与现有应用重名会被要求改名——"咖啡CAD"组合冲突概率低，以提交时提示为准；
-   - **名称里不要出现"鸿蒙/HarmonyOS/华为"字样**（审核禁用系统名与厂商商标暗示）；应用描述里写"支持鸿蒙 PC（2in1）"没问题；
-   - **App 备案时填的应用名称必须与上架名称一致**（都写"咖啡CAD"），包名备案后锁死；
+4. **命名过审（应用名"HoCAD"）**：
+   - AGC 提交时查重，与现有应用重名会被要求改名——"HoCAD"冲突概率低，以提交时提示为准；
+   - **名称里不要出现"鸿蒙/HarmonyOS/华为"字样**（审核禁用系统名与厂商商标暗示）；"HoCAD"安全；应用描述里写"支持鸿蒙 PC（2in1）"没问题；
+   - **App 备案时填的应用名称必须与上架名称一致**（都写"HoCAD"），包名备案后锁死；
    - 个人实名账号可上架效率/办公类目，无资质门槛；
    - 图标：`assets/app-icon` 是 MIT OR Apache-2.0，法律上可沿用，但建议自绘（咖啡+直角尺）避免与 CADCraft 商店条目混淆；换了就按仓库规矩在 `ATTRIBUTION.md` 加一行。
 5. **签名材料**：AGC 生成/上传发布证书（.cer）+ 申请发布 Profile（.p7b，绑定包名）+

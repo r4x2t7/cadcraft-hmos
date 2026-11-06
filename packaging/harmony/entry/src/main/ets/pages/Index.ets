@@ -351,7 +351,7 @@ struct Index {
           this.menuButton('UNDO', () => this.keyword('undo'))
           this.menuButton('REDO', () => this.keyword('redo'))
           Blank()
-          Text('咖啡CAD').fontSize(13).fontColor(ACCENT).margin({ right: 8 })
+          Text('HoCAD').fontSize(13).fontColor(ACCENT).margin({ right: 8 })
         }
         .width('100%').height(36).padding({ left: 6, right: 6 })
 

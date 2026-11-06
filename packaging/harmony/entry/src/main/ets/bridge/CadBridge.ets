@@ -2,7 +2,7 @@
  * The Node-API bridge to the Rust engine (`apps/cadcraft-ohos`).
  *
  * All coordinate arguments are DEVICE pixels relative to the canvas, origin top-left;
- * ArkTS works in vp, so Index.ets multiplies by the display density before calling in.
+ * Index.ets multiplies by the display density before calling in.
  */
 import native from 'libcadcraft_ohos.so';
 
@@ -11,24 +11,54 @@ export interface CadPrompt {
   keywords: string[];
 }
 
+export interface CadView {
+  center: number[];
+  height: number;
+}
+
+export interface CadCanvas {
+  width: number;
+  height: number;
+}
+
 export interface CadState {
   ok: boolean;
   error?: string;
   epoch: number;
   prompting: boolean;
   prompt: CadPrompt | null;
-  view: { center: number[]; height: number };
-  canvas: { width: number; height: number };
+  view: CadView;
+  canvas: CadCanvas;
   result?: object;
   log: string[];
 }
 
+const EMPTY_VIEW: CadView = { center: [0, 0], height: 10 };
+const EMPTY_CANVAS: CadCanvas = { width: 0, height: 0 };
+
 function parse(json: string): CadState {
+  let state: CadState;
   try {
-    return JSON.parse(json) as CadState;
+    state = JSON.parse(json) as CadState;
   } catch (e) {
-    return { ok: false, error: `${e}`, epoch: 0, prompting: false, prompt: null, view: { center: [0, 0], height: 10 }, canvas: { width: 0, height: 0 }, log: [] };
+    state = {
+      ok: false, error: `${e}`, epoch: 0, prompting: false, prompt: null,
+      view: EMPTY_VIEW, canvas: EMPTY_CANVAS, log: []
+    };
   }
+  if (!state.view) {
+    state.view = EMPTY_VIEW;
+  }
+  if (!state.canvas) {
+    state.canvas = EMPTY_CANVAS;
+  }
+  if (!state.log) {
+    state.log = [];
+  }
+  if (!state.prompt) {
+    state.prompt = null;
+  }
+  return state;
 }
 
 export class Cad {

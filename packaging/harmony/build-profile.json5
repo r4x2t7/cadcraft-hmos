@@ -4,24 +4,18 @@
     "products": [
       {
         "name": "default",
-        "signingConfig": null,
-        //compatibleSdkVersion: 5.0.2(13) 覆盖所有 2in1/鸿蒙 PC 机型；compile 用 DevEco 当前默认（HarmonyOS 6 / API 20）。
-        "compatibleSdkVersion": "5.0.2(13)",
-        "compileSdkVersion": "6.0.0(20)",
+        "compatibleSdkVersion": "5.0.2(14)",
         "targetSdkVersion": "6.0.0(20)",
-        "runtimeOS": "HarmonyOS",
-        "buildOption": {
-          "externalNativeOptions": {
-            // 预先由 build-ohos.sh 用 cargo 产出 entry/libs/arm64-v8a/libcadcraft_ohos.so；
-            // DevEco 直接打包该目录，不需要 CMake。
-            "path": null
-          }
-        }
+        "runtimeOS": "HarmonyOS"
       }
     ],
     "buildModeSet": [
-      { "name": "debug" },
-      { "name": "release" }
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
     ]
   },
   "modules": [
@@ -31,7 +25,9 @@
       "targets": [
         {
           "name": "default",
-          "applyToProducts": ["default"]
+          "applyToProducts": [
+            "default"
+          ]
         }
       ]
     }

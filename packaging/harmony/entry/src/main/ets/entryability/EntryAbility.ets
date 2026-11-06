@@ -19,13 +19,12 @@ export default class EntryAbility extends UIAbility {
       }
       hilog.info(0x0000, 'cadcraft', 'loaded pages/Index');
       // 自由窗口规范：声明最小尺寸（vp），缩小窗口时布局仍可读。
-      // setWindowMinSize 在个别版本不可见，失败不致命，吞掉（2in1 上也可改用
-      // setWindowLimits(..., isForcible: true)，API 15+）。
+      // setWindowMinSize 已由 setWindowLimits 的 minWidth/minHeight 取代（API 15+）。
       windowStage.getMainWindow()
-        .then((win: window.Window) => win.setWindowMinSize(
-          { windowWidth: MIN_WINDOW_VP, windowHeight: MIN_WINDOW_HEIGHT_VP }))
-        .catch((e: Error) => {
-          hilog.warn(0x0000, 'cadcraft', 'setWindowMinSize unavailable: %{public}s', `${e}`);
+        .then((win: window.Window): Promise<window.WindowLimits> => win.setWindowLimits(
+          { minWidth: MIN_WINDOW_VP, minHeight: MIN_WINDOW_HEIGHT_VP }))
+        .catch((e: Error): void => {
+          hilog.warn(0x0000, 'cadcraft', 'setWindowLimits unavailable: %{public}s', `${e}`);
         });
     });
   }

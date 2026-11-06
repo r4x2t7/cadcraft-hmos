@@ -1,13 +1,13 @@
-// CADCraft HarmonyOS shell (2in1 / PC + tablet): thin ArkUI front end over the Rust engine.
+// HoCAD HarmonyOS shell (2in1 / PC + tablet): thin ArkUI front end over the Rust engine.
 // Panels read engine state (cadState) and act through Cad* calls — the same discipline as
 // the egui UI crate ("the UI is thin"). Canvas frames come from the CPU rasteriser, like
 // the web and plot paths.
 //
 // All pointer coordinates handed to Cad are DEVICE pixels (vp × densityPixels).
 
-import { Cad, CadState } from '../bridge/CadBridge';
-import { picker } from '@kit.CoreFileKit';
-import { fs } from '@kit.CoreFileKit';
+import { Cad, CadState, CadView } from '../bridge/CadBridge';
+import picker from '@ohos.file.picker';
+import fs from '@ohos.file.fs';
 import { image } from '@kit.ImageKit';
 import { display } from '@kit.ArkUI';
 import { KeyCode } from '@ohos.multimodalInput.keyCode';
@@ -41,6 +41,7 @@ struct Index {
   private canvasW: number = 0; // vp
   private canvasH: number = 0; // vp
   private middle: MiddleDrag = new MiddleDrag();
+  private ctrlHeld: boolean = false;
   private dirty: boolean = true;
   private timerId: number = -1;
 
@@ -73,17 +74,17 @@ struct Index {
     }
     this.prompt = state.prompt ? state.prompt.message : '';
     this.keywords = state.prompt ? state.prompt.keywords : [];
-    if (state.log && state.log.length > 0) {
+    if (state.log.length > 0) {
       this.log = state.log.slice(-8);
     }
-    const view = state.view;
-    this.status = `实体 ${state.epoch} | 视图高 ${view.height.toFixed(2)} | 视图中心 (${view.center[0].toFixed(2)}, ${view.center[1].toFixed(2)})`;
+    const view: CadView = state.view;
+    this.status =
+      `视图高 ${view.height.toFixed(2)} | 中心 (${view.center[0].toFixed(2)}, ${view.center[1].toFixed(2)})`;
   }
 
   // ---------------- canvas ----------------
 
   onCanvasReady(): void {
-    // Canvas reports its vp size once laid out; resize the engine to the device-pixel size.
     this.canvasW = this.context.width;
     this.canvasH = this.context.height;
     Cad.resize(this.canvasW * this.dpr, this.canvasH * this.dpr);
@@ -106,18 +107,19 @@ struct Index {
         if (this.pixelMap !== null) {
           await this.pixelMap.release();
         }
-        this.pixelMap = await image.createPixelMap(buf, {
-          size: { width: w, height: h },
-          format: image.PixelMapFormat.RGBA_8888,
+        const size: image.Size = { width: w, height: h };
+        const opts: image.InitializationOptions = {
+          size: size,
+          pixelFormat: image.PixelMapFormat.RGBA_8888,
           srcPixelFormat: image.PixelMapFormat.RGBA_8888
-        });
+        };
+        this.pixelMap = await image.createPixelMap(buf, opts);
         this.frameWidth = w;
         this.frameHeight = h;
       } else {
-        await this.pixelMap.writePixels({
-          pixels: buf, offset: 0, stride: w * 4,
-          region: { x: 0, y: 0, width: w, height: h }
-        });
+        const region: image.Region = { size: { width: w, height: h }, x: 0, y: 0 };
+        const area: image.PositionArea = { pixels: buf, offset: 0, stride: w * 4, region: region };
+        await this.pixelMap.writePixels(area);
       }
       this.context.drawImage(this.pixelMap, 0, 0, this.canvasW, this.canvasH);
     } catch (e) {
@@ -131,8 +133,8 @@ struct Index {
 
   // ---------------- interactions ----------------
 
-  onMouse(event: MouseEvent): void {
-    const p = this.device(event.x, event.y);
+  handleMouse(event: MouseEvent): void {
+    const p: number[] = this.device(event.x, event.y);
     if (event.action === MouseAction.Move) {
       Cad.move(p[0], p[1]);
       if (this.middle.down) {
@@ -152,30 +154,27 @@ struct Index {
         this.middle.lastY = p[1];
         // 右键交给 bindContextMenu（2in1 体验规范要求右键菜单）；菜单内含"取消 (Esc)"。
       } else if (event.button === MouseButton.Left) {
-        this.applyState(Cad.click(p[0], p[1], false, false));
+        this.applyState(Cad.click(p[0], p[1], false, this.ctrlHeld));
         this.dirty = true;
       }
       return;
     }
-    if (event.action === MouseAction.Release) {
-      if (event.button === MouseButton.Middle) {
-        this.middle.down = false;
-      }
+    if (event.action === MouseAction.Release && event.button === MouseButton.Middle) {
+      this.middle.down = false;
     }
   }
 
-  onTouch(event: TouchEvent): void {
+  handleTouch(event: TouchEvent): void {
     // Single tap = click; two-finger drag = pan; pinch zoom is a PinchGesture below.
-    if (event.type === TouchType.Up && event.touches.length === 0 && event.changedTouches.length >= 1) {
-      const t = event.changedTouches[0];
-      const p = this.device(t.x, t.y);
+    if (event.type === TouchType.Up && event.changedTouches.length >= 1) {
+      const t: TouchObject = event.changedTouches[0];
+      const p: number[] = this.device(t.x, t.y);
       this.applyState(Cad.click(p[0], p[1], false, false));
       this.dirty = true;
     } else if (event.type === TouchType.Move && event.touches.length === 2) {
-      const a = event.touches[0];
-      const b = event.touches[1];
-      const cx = this.device((a.x + b.x) / 2, (a.y + b.y) / 2);
-      // Track the previous two-finger midpoint on the gesture state.
+      const a: TouchObject = event.touches[0];
+      const b: TouchObject = event.touches[1];
+      const cx: number[] = this.device((a.x + b.x) / 2, (a.y + b.y) / 2);
       if (this.middle.down) {
         Cad.pan(cx[0] - this.middle.lastX, cx[1] - this.middle.lastY);
         this.dirty = true;
@@ -183,37 +182,37 @@ struct Index {
       this.middle.down = true;
       this.middle.lastX = cx[0];
       this.middle.lastY = cx[1];
-    } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      if (event.touches.length < 2) {
-        this.middle.down = false;
-      }
+    } else if (event.touches.length < 2) {
+      this.middle.down = false;
     }
   }
 
-  onPinch(event: PinchEvent): void {
-    const cx = this.canvasW / 2;
-    const cy = this.canvasH / 2;
-    const p = this.device(cx, cy);
-    // pinch scale is cumulative since the gesture started; zoom factor = new/old.
+  handlePinch(event: GestureEvent): void {
+    const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
     this.applyState(Cad.zoom(event.scale / Math.max(0.001, this.lastPinch), p[0], p[1]));
     this.lastPinch = event.scale;
     this.dirty = true;
   }
 
-  onKey(event: KeyEvent): void {
+  handleKey(event: KeyEvent): void {
+    // Track Ctrl ourselves: ArkTS KeyEvent carries no modifier state in this SDK.
+    if (event.keyCode === KeyCode.KEYCODE_CTRL_LEFT || event.keyCode === KeyCode.KEYCODE_CTRL_RIGHT) {
+      this.ctrlHeld = event.type === KeyType.Down;
+      return;
+    }
     if (event.type !== KeyType.Down) {
       return;
     }
-    // 快捷键（2in1 体验规范）：画布聚焦时 Esc/Enter/Ctrl+Z/Ctrl+Y 直达命令行语义。
+    // 快捷键（2in1 体验规范）：画布聚焦时 Esc/Enter，Ctrl+Z/Ctrl+Y 走自跟踪的 ctrlHeld。
     if (event.keyCode === KeyCode.KEYCODE_ESCAPE) {
       this.applyState(Cad.cancel());
       this.dirty = true;
     } else if (event.keyCode === KeyCode.KEYCODE_ENTER) {
       this.applyState(Cad.enter());
       this.dirty = true;
-    } else if (event.isCtrlPressed && event.keyCode === KeyCode.KEYCODE_Z) {
+    } else if (this.ctrlHeld && event.keyCode === KeyCode.KEYCODE_Z) {
       this.keyword('undo');
-    } else if (event.isCtrlPressed && event.keyCode === KeyCode.KEYCODE_Y) {
+    } else if (this.ctrlHeld && event.keyCode === KeyCode.KEYCODE_Y) {
       this.keyword('redo');
     }
   }
@@ -221,7 +220,7 @@ struct Index {
   // ---------------- commands ----------------
 
   submitCmd(): void {
-    const text = this.cmdText.trim();
+    const text: string = this.cmdText.trim();
     this.cmdText = '';
     if (text.length > 0) {
       this.applyState(Cad.cmdline(text));
@@ -240,23 +239,24 @@ struct Index {
     this.applyState(Cad.start(name));
     this.dirty = true;
   }
+
   async openDxf(): Promise<void> {
     try {
-      const docPicker = new picker.DocumentViewPicker();
-      const opts = new picker.DocumentSelectOptions();
+      const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
+      const opts: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
       opts.maxSelectNumber = 1;
       opts.fileSuffixFilters = ['.dxf'];
-      const uris = await docPicker.select(opts);
-      if (!uris || uris.length === 0) {
+      const uris: string[] = await docPicker.select(opts);
+      if (uris.length === 0) {
         return;
       }
-      const uri = uris[0];
-      const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
-      const stat = fs.statSync(file.fd);
-      const buf = new ArrayBuffer(stat.size);
+      const uri: string = uris[0];
+      const file: fs.File = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      const stat: fs.Stat = fs.statSync(file.fd);
+      const buf: ArrayBuffer = new ArrayBuffer(stat.size);
       fs.readSync(file.fd, buf);
       fs.closeSync(file);
-      const name = uri.substring(uri.lastIndexOf('/') + 1);
+      const name: string = uri.substring(uri.lastIndexOf('/') + 1);
       this.applyState(Cad.openDxf(name, buf));
       this.dirty = true;
     } catch (e) {
@@ -267,17 +267,17 @@ struct Index {
   async saveDxf(): Promise<void> {
     try {
       const dxf: string = Cad.saveDxf();
-      const docPicker = new picker.DocumentViewPicker();
-      const opts = new picker.DocumentSaveOptions();
+      const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
+      const opts: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
       opts.newFileNames = ['drawing.dxf'];
-      const uri = await docPicker.save(opts);
-      if (!uri || uri.length === 0) {
+      const uris: string[] = await docPicker.save(opts);
+      if (uris.length === 0) {
         return;
       }
-      const file = fs.openSync(uri[0], fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
+      const file: fs.File = fs.openSync(uris[0], fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
       fs.writeSync(file.fd, dxf);
       fs.closeSync(file);
-      this.log.push(`已保存 ${uri[0]}`);
+      this.log.push(`已保存 ${uris[0]}`);
     } catch (e) {
       this.status = `保存: ${e}`;
     }
@@ -305,105 +305,155 @@ struct Index {
     }
   }
 
-  menuButton(label: string, action: () => void): Button {
-    return Button(label)
-      .fontSize(13)
-      .height(30)
-      .padding({ left: 10, right: 10 })
-      .backgroundColor(PANEL)
-      .fontColor('#dfe6ee')
-      .onClick(() => action());
+  @Builder
+  menuBar() {
+    Row({ space: 4 }) {
+      Button('打开')
+        .fontSize(13).height(30).padding({ left: 10, right: 10 })
+        .backgroundColor(PANEL).fontColor('#dfe6ee')
+        .onClick(() => this.openDxf())
+      Button('保存')
+        .fontSize(13).height(30).padding({ left: 10, right: 10 })
+        .backgroundColor(PANEL).fontColor('#dfe6ee')
+        .onClick(() => this.saveDxf())
+      Button('缩放范围')
+        .fontSize(13).height(30).padding({ left: 10, right: 10 })
+        .backgroundColor(PANEL).fontColor('#dfe6ee')
+        .onClick(() => {
+          this.applyState(Cad.zoomExtents());
+          this.dirty = true;
+        })
+      Button('UNDO')
+        .fontSize(13).height(30).padding({ left: 10, right: 10 })
+        .backgroundColor(PANEL).fontColor('#dfe6ee')
+        .onClick(() => this.keyword('undo'))
+      Button('REDO')
+        .fontSize(13).height(30).padding({ left: 10, right: 10 })
+        .backgroundColor(PANEL).fontColor('#dfe6ee')
+        .onClick(() => this.keyword('redo'))
+      Blank()
+      Text('HoCAD').fontSize(13).fontColor(ACCENT).margin({ right: 8 })
+    }
+    .width('100%')
+    .height(36)
+    .padding({ left: 6, right: 6 })
   }
 
-  build() {
-    Row({ space: 4 }) {
-      // Tool Sets (left) — the same commands the desktop's Tool Sets panel starts.
+  @Builder
+  toolColumn() {
+    Scroll() {
       Column({ space: 4 }) {
         Text('绘图').fontSize(12).fontColor(ACCENT).margin({ top: 8 })
         ForEach(['line', 'circle', 'arc', 'mtext', 'dimlinear', 'hatch'], (c: string) => {
           Button(c.toUpperCase())
-            .width(88).height(30).fontSize(12)
-            .backgroundColor(PANEL).fontColor('#dfe6ee')
+            .width(88)
+            .height(30)
+            .fontSize(12)
+            .backgroundColor(PANEL)
+            .fontColor('#dfe6ee')
             .onClick(() => this.startCommand(c))
         }, (c: string) => c)
         Text('修改').fontSize(12).fontColor(ACCENT).margin({ top: 8 })
         ForEach(['erase', 'move', 'copy', 'offset', 'trim'], (c: string) => {
           Button(c.toUpperCase())
-            .width(88).height(30).fontSize(12)
-            .backgroundColor(PANEL).fontColor('#dfe6ee')
+            .width(88)
+            .height(30)
+            .fontSize(12)
+            .backgroundColor(PANEL)
+            .fontColor('#dfe6ee')
             .onClick(() => this.startCommand(c))
         }, (c: string) => c)
       }
-      .width(100)
+      .width('100%')
       .alignItems(HorizontalAlign.Center)
-      .backgroundColor(BG)
-      .scrollable(ScrollDirection.Vertical)
+    }
+    .scrollable(ScrollDirection.Vertical)
+    .scrollBar(BarState.Auto)
+  }
+
+  build() {
+    Row({ space: 4 }) {
+      Column() {
+        this.toolColumn()
+      }
+      .width(100)
 
       Column() {
-        // Menu bar
-        Row({ space: 4 }) {
-          this.menuButton('打开', () => this.openDxf())
-          this.menuButton('保存', () => this.saveDxf())
-          this.menuButton('缩放范围', () => {
-            this.applyState(Cad.zoomExtents());
-            this.dirty = true;
-          })
-          this.menuButton('UNDO', () => this.keyword('undo'))
-          this.menuButton('REDO', () => this.keyword('redo'))
-          Blank()
-          Text('HoCAD').fontSize(13).fontColor(ACCENT).margin({ right: 8 })
-        }
-        .width('100%').height(36).padding({ left: 6, right: 6 })
+        this.menuBar()
 
-        // Canvas: click to pick, middle-drag / two-finger pan, pinch or wheel-free zoom.
+        // Canvas: click to pick, middle-drag / two-finger pan, pinch zoom, right-click menu.
         Column() {
           Canvas(this.context)
             .width('100%')
             .height('100%')
             .backgroundColor(BG)
             .onReady(() => this.onCanvasReady())
-            .onMouse((event: MouseEvent) => this.onMouse(event))
-            .onTouch((event: TouchEvent) => this.onTouch(event))
-            .onKeyEvent((event: KeyEvent) => this.onKey(event))
+            .onMouse((event: MouseEvent) => this.handleMouse(event))
+            .onTouch((event: TouchEvent) => this.handleTouch(event))
+            .onKeyEvent((event: KeyEvent) => this.handleKey(event))
             // 焦点反馈（2in1 体验规范）：画布聚焦时描边高亮；点击即聚焦使快捷键生效。
             .focusable(true)
             .focusOnTouch(true)
-            .onFocus(() => { this.canvasFocused = true; })
-            .onBlur(() => { this.canvasFocused = false; })
+            .onFocus(() => {
+              this.canvasFocused = true;
+            })
+            .onBlur(() => {
+              this.canvasFocused = false;
+            })
             .border({ width: 1, color: this.canvasFocused ? ACCENT : '#00000000' })
             .bindContextMenu(this.canvasMenu, ResponseType.RightClick)
             .gesture(PinchGesture({ fingers: 2 })
-              .onActionUpdate((event: GestureEvent) => this.onPinch(event as PinchEvent)))
+              .onActionUpdate((event: GestureEvent) => this.handlePinch(event)))
         }
         .layoutWeight(1)
 
         // Command line: prompt + keywords + input + history, like the desktop's bottom strip.
         Column({ space: 2 }) {
           Row({ space: 6 }) {
-            Text(this.prompt.length > 0 ? this.prompt : '命令:').fontSize(13).fontColor(ACCENT)
+            Text(this.prompt.length > 0 ? this.prompt : '命令:')
+              .fontSize(13)
+              .fontColor(ACCENT)
             ForEach(this.keywords, (kw: string) => {
-              Text(kw).fontSize(12).fontColor('#8fd8ef')
-                .padding(4).border({ width: 1, color: '#3a4450', radius: 4 })
+              Text(kw)
+                .fontSize(12)
+                .fontColor('#8fd8ef')
+                .padding(4)
+                .border({ width: 1, color: '#3a4450', radius: 4 })
                 .onClick(() => this.keyword(kw))
             }, (kw: string) => kw)
           }
-          .width('100%').padding({ left: 6, right: 6 })
+          .width('100%')
+          .padding({ left: 6, right: 6 })
 
           TextInput({ text: this.cmdText, placeholder: '输入命令或坐标，如 circle 0,0 5' })
-            .width('100%').height(32).fontSize(13)
-            .onChange((v: string) => { this.cmdText = v; })
+            .width('100%')
+            .height(32)
+            .fontSize(13)
+            .onChange((v: string) => {
+              this.cmdText = v;
+            })
             .onSubmit(() => this.submitCmd())
 
           ForEach(this.log.slice(-4), (line: string) => {
-            Text(line).fontSize(11).fontColor('#9fb0c0').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%').padding({ left: 6 })
+            Text(line)
+              .fontSize(11)
+              .fontColor('#9fb0c0')
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+              .padding({ left: 6 })
           }, (line: string, i: number) => `${i}-${line}`)
         }
-        .width('100%').padding({ top: 4, bottom: 4 })
+        .width('100%')
+        .padding({ top: 4, bottom: 4 })
         .backgroundColor(PANEL)
 
-        Text(this.status).fontSize(11).fontColor('#7d8ea0')
-          .width('100%').height(20).padding({ left: 6 })
+        Text(this.status)
+          .fontSize(11)
+          .fontColor('#7d8ea0')
+          .width('100%')
+          .height(20)
+          .padding({ left: 6 })
       }
       .layoutWeight(1)
 

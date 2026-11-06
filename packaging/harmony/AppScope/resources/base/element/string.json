@@ -1,0 +1,8 @@
+{
+  "string": [
+    { "name": "app_name", "value": "咖啡CAD" },
+    { "name": "module_desc", "value": "咖啡CAD：基于 CADCraft 的原生鸿蒙 CAD" },
+    { "name": "EntryAbility_desc", "value": "咖啡CAD computer-aided design and drafting" },
+    { "name": "EntryAbility_label", "value": "咖啡CAD" }
+  ]
+}

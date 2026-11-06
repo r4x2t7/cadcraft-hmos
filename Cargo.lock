@@ -777,6 +777,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadcraft-ohos"
+version = "0.17.0"
+dependencies = [
+ "cadcraft-engine",
+ "cadcraft-io",
+ "cadcraft-render",
+ "serde_json",
+]
+
+[[package]]
 name = "cadcraft-render"
 version = "0.17.0"
 dependencies = [

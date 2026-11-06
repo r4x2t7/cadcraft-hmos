@@ -1,0 +1,33 @@
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    // 2in1 = 鸿蒙 PC（MateBook Pro / MateBook Fold 等）；tablet = 平板共享同一 UI。
+    "deviceTypes": ["2in1", "tablet"],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:app_icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        // PC 上多窗口自由缩放；最小窗口由 ArkUI 默认值兜底。
+        "orientation": "unspecified",
+        "supportWindowMode": ["fullscreen", "split", "floating"],
+        "skills": [
+          {
+            "entities": ["entity.system.home"],
+            "actions": ["action.system.home"]
+          }
+        ]
+      }
+    ]
+  }
+}

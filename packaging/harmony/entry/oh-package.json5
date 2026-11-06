@@ -1,0 +1,12 @@
+{
+  "name": "cadcraft",
+  "version": "1.0.0",
+  "description": "CADCraft HarmonyOS shell",
+  "main": "",
+  "author": "",
+  "license": "MIT OR Apache-2.0",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.21"
+  }
+}

@@ -1,3 +1,15 @@
+# 咖啡CAD（CoffeeCAD）— CADCraft 的原生鸿蒙移植
+
+> 本仓库是 [storytold/cadcraft](https://github.com/storytold/cadcraft) 的**硬分叉**（hard fork）：
+> 把 CADCraft 移植为 **HarmonyOS / 鸿蒙 PC（2in1）原生应用**——ArkUI 壳 + Rust 引擎
+> Node-API 模块（`apps/cadcraft-ohos`）+ CPU 软渲染（`packaging/harmony`），构建与上架见
+> [packaging/harmony/README.md](packaging/harmony/README.md)。
+> 移植与维护：**霁伪**（[r4x2t7](https://github.com/r4x2t7)）。
+> 协议不变：MIT OR Apache-2.0（`LICENSE-MIT` / `LICENSE-APACHE` / `NOTICE`）；上游改动通过
+> `git fetch upstream && git merge upstream/main` 持续合并进来，全部改动见 git 历史。
+
+---
+
 <p align="center">
   <a href="https://getartcraft.com/">
     <picture>

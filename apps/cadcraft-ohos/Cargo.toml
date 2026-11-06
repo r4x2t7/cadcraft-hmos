@@ -1,0 +1,34 @@
+[package]
+name = "cadcraft-ohos"
+description = "CADCraft OpenHarmony/HarmonyOS Node-API module: engine bridge behind the ArkUI shell (PC/2in1 + tablet)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "cadcraft_ohos"
+# Node-API native module loaded from ArkTS as `import cad from 'libcadcraft_ohos.so'`.
+crate-type = ["cdylib"]
+
+# Deliberately NO `[lints] workspace = true`: the Node-API shim needs `unsafe` (all of it
+# confined to `src/ffi.rs`), which the workspace forbids crate-wide. The spirit is kept:
+# no unwrap/expect/panic anywhere, errors are JSON `{"ok":false,...}` replies.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+# Builds empty on every other target (all code is `#[cfg(target_env = "ohos")]`), so the
+# workspace's host CI (`cargo xtask ci`) never links OHOS libraries. NOTE: the ohos triples
+# carry target_os = "linux", target_env = "ohos" — the gate must be target_env.
+[target.'cfg(target_env = "ohos")'.dependencies]
+cadcraft-engine = { workspace = true }
+cadcraft-io = { workspace = true }
+cadcraft-render = { workspace = true }
+serde_json = { workspace = true }

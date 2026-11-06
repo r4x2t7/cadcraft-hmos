@@ -25,6 +25,42 @@
 
 ---
 
+## 鸿蒙版额外功能
+
+相对上游桌面 / Web 版，本仓库在 HarmonyOS 上提供的适配（对齐
+[photocraft-hmos](https://github.com/MXJinjing/photocraft-hmos) 的适配清单口径）：
+
+已实现：
+
+- **触屏优化** — 双指捏合缩放、双指拖动平移，适合平板与 2in1 触屏
+- **2in1 键鼠全适配** — 左键点选/画点、中键拖拽平移、右键上下文菜单（取消 / 缩放范围 /
+  撤销 / 重做 / LINE / CIRCLE / ERASE）、Esc / Enter / Ctrl+Z / Ctrl+Y 快捷键、画布聚焦描边
+- **系统文件选择器** — 打开 / 保存 DXF 均走鸿蒙沙箱 DocumentViewPicker
+- **自由窗口** — 分屏 / 悬浮窗全档 `supportWindowMode`，最小窗口 480×320 vp 声明
+- **高分屏渲染** — 按设备像素（DPR）出图；CPU 光栅化与上游 web/plot 路径同源
+- **命令行优先** — 命令行输入、提示关键词、橡皮筋预览、点选全部由引擎原样驱动（与桌面同语义）
+
+计划中（跟随 photocraft-hmos 的适配面）：
+
+- **滚轮缩放** — 轴事件（AXIS_SCROLL）接入 `zoom_about`
+- **图层 / 特性面板** — 直读引擎图层表与选中实体属性
+- **对象捕捉** — `snap_cursor` / `input_snapped` 接入光标移动
+- **系统与用户安装字体**、**原生子窗口**（浮动面板）、**可选全屏** — 同 photocraft-hmos 路线
+
+其余绘图、标注、块、DXF 等能力以引擎（上游说明）为准，设备上实际表现为准。
+
+---
+
+## 运行截图
+
+| 主界面（2in1 模拟器） | 画线 |
+|:---:|:---:|
+| ![](docs/screenshots/hmos-line.jpeg) | LINE 命令由 Tool Sets 启动，画布点两点；提示关键词（Undo）与命令行状态来自引擎原样驱动 |
+
+（3120×2080，MateBook Pro 模拟器镜像，自由窗口模式）
+
+---
+
 <p align="center">
   <a href="https://getartcraft.com/">
     <picture>

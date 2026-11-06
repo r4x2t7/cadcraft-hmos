@@ -41,7 +41,16 @@ pub fn frame(app: &mut App) -> Vec<u8> {
     let list = cadcraft_render::build(d, &space, &opts);
 
     match cadcraft_render::raster::render(&list, &raster_view, &cadcraft_render::raster::RasterOptions::default()) {
-        Some(pm) => pm.data().to_vec(),
+        Some(pm) => {
+            let mut bytes = pm.data().to_vec();
+            // The shell hands the buffer to image.createPixelMap, whose source pixels are
+            // read as BGRA_8888 by default (SDK 26 ignores an explicit RGBA srcPixelFormat),
+            // so swap R/B once here: premultiplied RGBA → premultiplied BGRA.
+            for px in bytes.chunks_exact_mut(4) {
+                px.swap(0, 2);
+            }
+            bytes
+        }
         None => Vec::new(),
     }
 }

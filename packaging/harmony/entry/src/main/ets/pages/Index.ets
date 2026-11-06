@@ -108,10 +108,10 @@ struct Index {
           await this.pixelMap.release();
         }
         const size: image.Size = { width: w, height: h };
+        // The Rust side emits premultiplied BGRA (see apps/cadcraft-ohos/src/render.rs).
         const opts: image.InitializationOptions = {
           size: size,
-          pixelFormat: image.PixelMapFormat.RGBA_8888,
-          srcPixelFormat: image.PixelMapFormat.RGBA_8888
+          srcPixelFormat: image.PixelMapFormat.BGRA_8888
         };
         this.pixelMap = await image.createPixelMap(buf, opts);
         this.frameWidth = w;

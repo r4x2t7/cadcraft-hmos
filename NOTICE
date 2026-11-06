@@ -3,16 +3,6 @@ Copyright (c) 2026 ArtCraft Team and the CADCraft contributors.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option
 (LICENSE-MIT, LICENSE-APACHE).
 
-HarmonyOS port — HoCAD
-----------------------
-The HarmonyOS (OpenHarmony / 2in1) port "HoCAD" is maintained by 霁伪 (JiWei,
-https://github.com/r4x2t7). The port additions (apps/cadcraft-ohos, packaging/harmony)
-are new files under the same MIT License or the Apache License, Version 2.0, at your
-option; Copyright (c) 2026 霁伪 (JiWei). Everything else is carried over from CADCraft;
-every modification relative to upstream is tracked in the git history.
-鸿蒙移植部分（apps/cadcraft-ohos、packaging/harmony，应用名 HoCAD）由霁伪维护，
-遵循相同的 MIT / Apache-2.0 双许可；其余文件沿用 CADCraft，全部修改记录于 git 历史。
-
 The ArtCraft name, wordmark and logos in docs/brand/ are trademarks of the ArtCraft Team. They are
 not open source and are not covered by the license above; their terms are in
 docs/brand/LICENSE-brand.txt.
@@ -58,3 +48,14 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+HarmonyOS port — HoCAD
+----------------------
+The HarmonyOS (OpenHarmony / 2in1) port "HoCAD" is maintained by 霁伪 (JiWei,
+https://github.com/r4x2t7). The port additions (apps/cadcraft-ohos, packaging/harmony)
+are new files under the same MIT License or the Apache License, Version 2.0, at your
+option; Copyright (c) 2026 霁伪 (JiWei). Everything else is carried over from CADCraft;
+every modification relative to upstream is tracked in the git history.
+鸿蒙移植部分（apps/cadcraft-ohos、packaging/harmony，应用名 HoCAD）由霁伪维护，
+遵循相同的 MIT / Apache-2.0 双许可；其余文件沿用 CADCraft，全部修改记录于 git 历史。

@@ -12,15 +12,28 @@ pub struct App {
     pub width: u32,
     pub height: u32,
     /// Wall time of the last `frame()` (build + raster), in ms — shown in the shell's
-    /// status bar and the same number to read on a real device later.
+    /// status bar and the same number to read on a cloud real device later.
     pub last_frame_ms: f64,
+    /// Split of the last frame: display-list build and tiny-skia raster.
+    pub last_build_ms: f64,
+    pub last_raster_ms: f64,
+    /// Entities that passed viewport culling (of `model.len()`), last frame.
+    pub last_visible: usize,
 }
 
 impl App {
     pub fn new() -> Self {
         let mut session = Session::new();
         session.viewport_px = (1200.0, 800.0);
-        App { session, width: 1200, height: 800, last_frame_ms: 0.0 }
+        App {
+            session,
+            width: 1200,
+            height: 800,
+            last_frame_ms: 0.0,
+            last_build_ms: 0.0,
+            last_raster_ms: 0.0,
+            last_visible: 0,
+        }
     }
 
     pub fn resize(&mut self, w: f64, h: f64) {
@@ -73,6 +86,10 @@ impl App {
             "ok": true,
             "epoch": self.session.doc_epoch,
             "frameMs": self.last_frame_ms,
+            "buildMs": self.last_build_ms,
+            "rasterMs": self.last_raster_ms,
+            "visible": self.last_visible,
+            "total": self.session.doc().map(|d| d.model.len()).unwrap_or(0),
             "prompting": prompt.is_some(),
             "prompt": prompt,
             "view": { "center": [view.center.x, view.center.y], "height": view.height },

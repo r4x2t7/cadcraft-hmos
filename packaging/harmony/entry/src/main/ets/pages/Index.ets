@@ -93,7 +93,10 @@ struct Index {
       this.log = state.log.slice(-8);
     }
     if (state.frameMs !== undefined && state.frameMs > 0) {
-      this.frameMs = `渲染 ${state.frameMs.toFixed(0)}ms`;
+      const vis: string = (state.visible !== undefined && state.total !== undefined && state.visible < state.total)
+        ? ` ${state.visible}/${state.total}`
+        : '';
+      this.frameMs = `渲染 ${state.frameMs.toFixed(0)}ms (建 ${state.buildMs?.toFixed(0) ?? '?'} + 画 ${state.rasterMs?.toFixed(0) ?? '?'}${vis})`;
     }
     const view: CadView = state.view;
     this.status =

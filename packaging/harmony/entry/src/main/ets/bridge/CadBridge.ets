@@ -26,6 +26,10 @@ export interface CadState {
   error?: string;
   epoch: number;
   frameMs?: number;
+  buildMs?: number;
+  rasterMs?: number;
+  visible?: number;
+  total?: number;
   prompting: boolean;
   prompt: CadPrompt | null;
   view: CadView;

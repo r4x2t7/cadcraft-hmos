@@ -1,10 +1,19 @@
 //! CPU-rasterised canvas frames: engine display list → tiny-skia RGBA, like the web and
 //! plot paths. The shell blits the buffer into a PixelMap each redraw.
+//!
+//! Kept entirely inside this crate on purpose: upstream `crates/render` evolves fast, and
+//! anything we need from it that does not exist (viewport culling beyond hatches, parallel
+//! strips) is upstream-PR material, not a local patch. `d.model.iter()` +
+//! `doc::extents::entity_bounds` + `pipeline::build_entities` are public API, so the
+//! culling here is a pure caller-side filter.
+
+use cadcraft_engine::geom::{Bounds2, Vec2};
 
 use crate::app::App;
 
-/// Render the current view. Returns premultiplied RGBA_8888 bytes (the background is
-/// opaque, so premultiplied equals straight), row-major top-left origin, no padding.
+/// Render the current view. Returns premultiplied BGRA_8888 bytes (the background is
+/// opaque; R/B are swapped for the shell's PixelMap), row-major top-left origin, no
+/// padding.
 pub fn frame(app: &mut App) -> Vec<u8> {
     let started = std::time::Instant::now();
     let Ok(st) = app.session.state() else { return Vec::new() };
@@ -21,9 +30,11 @@ pub fn frame(app: &mut App) -> Vec<u8> {
         width: w,
         height: h,
     };
-
     let Ok(d) = app.session.doc() else { return Vec::new() };
     let space = app.session.space();
+
+    // ---- display list: viewport culling + build -------------------------------
+    let build_started = std::time::Instant::now();
     let opts = cadcraft_render::Options {
         // About half a pixel of chord tolerance at the current zoom, like the desktop canvas.
         tolerance: 0.5 / scale,
@@ -39,9 +50,39 @@ pub fn frame(app: &mut App) -> Vec<u8> {
         skip_viewport: None,
         cancel: None,
     };
-    let list = cadcraft_render::build(d, &space, &opts);
+    // Entities whose bounds miss the view (2% slack for hairline extents) never enter the
+    // display list. Skipped when the view already covers the drawing: the filter would only
+    // pay for itself.
+    let vb = raster_view.world_bounds();
+    let slack = (vb.width() + vb.height()) * 0.02;
+    let culled = Bounds2::new(vb.min - Vec2::new(slack, slack), vb.max + Vec2::new(slack, slack));
+    let total = d.model.len();
+    let ext = d.extents(&space);
+    let covers_drawing = ext.is_empty()
+        || (culled.min.x <= ext.min.x && culled.min.y <= ext.min.y
+            && culled.max.x >= ext.max.x && culled.max.y >= ext.max.y);
+    let list = if covers_drawing {
+        app.last_visible = total;
+        cadcraft_render::build(d, &space, &opts)
+    } else {
+        let visible: Vec<&cadcraft_doc::Entity> = d
+            .model
+            .iter()
+            .filter(|e| cadcraft_doc::entity_bounds(d, e, 0).intersects(&culled))
+            .map(|e| e.as_ref())
+            .collect();
+        app.last_visible = visible.len();
+        cadcraft_render::build_entities(d, visible, &opts)
+    };
+    let build_ms = build_started.elapsed().as_secs_f64() * 1000.0;
 
-    match cadcraft_render::raster::render(&list, &raster_view, &cadcraft_render::raster::RasterOptions::default()) {
+    // ---- raster ----------------------------------------------------------------
+    let render_started = std::time::Instant::now();
+    let bytes = match cadcraft_render::raster::render(
+        &list,
+        &raster_view,
+        &cadcraft_render::raster::RasterOptions::default(),
+    ) {
         Some(pm) => {
             let mut bytes = pm.data().to_vec();
             // The shell hands the buffer to image.createPixelMap, whose source pixels are
@@ -50,12 +91,12 @@ pub fn frame(app: &mut App) -> Vec<u8> {
             for px in bytes.chunks_exact_mut(4) {
                 px.swap(0, 2);
             }
-            app.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
             bytes
         }
-        None => {
-            app.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
-            Vec::new()
-        }
-    }
+        None => Vec::new(),
+    };
+    app.last_build_ms = build_ms;
+    app.last_raster_ms = render_started.elapsed().as_secs_f64() * 1000.0;
+    app.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
+    bytes
 }

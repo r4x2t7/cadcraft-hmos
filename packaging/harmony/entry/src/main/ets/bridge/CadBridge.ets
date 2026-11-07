@@ -21,6 +21,29 @@ export interface CadCanvas {
   height: number;
 }
 
+export interface CadLayer {
+  name: string;
+  on: boolean;
+  frozen: boolean;
+  locked: boolean;
+}
+
+export interface CadSel {
+  kind: string;
+  layer: string;
+}
+
+export interface CadMenuItem {
+  label: string;
+  id: string;
+  key?: string;
+}
+
+export interface CadMenu {
+  title: string;
+  items: CadMenuItem[];
+}
+
 export interface CadState {
   ok: boolean;
   error?: string;
@@ -34,6 +57,9 @@ export interface CadState {
   prompt: CadPrompt | null;
   view: CadView;
   canvas: CadCanvas;
+  layers: CadLayer[];
+  currentLayer: string;
+  selection: CadSel[];
   result?: object;
   log: string[];
 }
@@ -48,7 +74,7 @@ function parse(json: string): CadState {
   } catch (e) {
     state = {
       ok: false, error: `${e}`, epoch: 0, prompting: false, prompt: null,
-      view: EMPTY_VIEW, canvas: EMPTY_CANVAS, log: []
+      view: EMPTY_VIEW, canvas: EMPTY_CANVAS, log: [], layers: [], currentLayer: '', selection: []
     };
   }
   if (!state.view) {
@@ -63,12 +89,30 @@ function parse(json: string): CadState {
   if (!state.prompt) {
     state.prompt = null;
   }
+  if (!state.layers) {
+    state.layers = [];
+  }
+  if (!state.selection) {
+    state.selection = [];
+  }
+  if (!state.currentLayer) {
+    state.currentLayer = '';
+  }
   return state;
 }
 
 export class Cad {
   static init(): CadState {
     return parse(native.cadInit() as string);
+  }
+
+  /** The engine menu tree, flattened per top menu; the menubar is built from it. */
+  static menus(): CadMenu[] {
+    try {
+      return JSON.parse(native.cadMenus() as string) as CadMenu[];
+    } catch (e) {
+      return [];
+    }
   }
 
   static resize(w: number, h: number): void {

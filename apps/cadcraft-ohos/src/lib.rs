@@ -88,6 +88,7 @@ static REGISTER_MODULE: unsafe extern "C" fn() = {
 unsafe extern "C" fn init(env: ffi::Env, exports: ffi::Value) -> ffi::Value {
     let pairs: Vec<(&str, ffi::NapiCallback)> = vec![
         ("cadInit", Some(cad_init)),
+        ("cadMenus", Some(cad_menus)),
         ("cadResize", Some(cad_resize)),
         ("cadExecute", Some(cad_execute)),
         ("cadCmdline", Some(cad_cmdline)),
@@ -148,6 +149,14 @@ unsafe extern "C" fn cad_init(env: ffi::Env, info: ffi::CallbackInfo) -> ffi::Va
         *guard = Some(app);
     }
     ffi::js_ok(env, serde_json::json!({ "version": cadcraft_engine::build_version() }))
+}
+
+unsafe extern "C" fn cad_menus(env: ffi::Env, info: ffi::CallbackInfo) -> ffi::Value {
+    let _ = ffi::args(env, info);
+    match app::App::menus_json() {
+        Ok(tree) => ffi::js_string(env, &tree),
+        Err(msg) => ffi::js_error(env, &msg),
+    }
 }
 
 unsafe extern "C" fn cad_resize(env: ffi::Env, info: ffi::CallbackInfo) -> ffi::Value {

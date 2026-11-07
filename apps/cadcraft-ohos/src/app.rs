@@ -75,6 +75,39 @@ impl App {
         state.to_string()
     }
 
+    /// The engine menu tree, flattened per top menu (`Draw`, `Modify`, …); depth-3 paths
+    /// become `Group › Item` labels. The shell builds its menubar from this.
+    pub fn menus_json() -> Result<String, String> {
+        use cadcraft_engine::cmd::command_specs;
+        let mut root: Vec<serde_json::Value> = Vec::new();
+        for spec in command_specs() {
+            if spec.menu.len() < 2 {
+                continue;
+            }
+            let top = spec.menu[0];
+            let idx = match root.iter().position(|n| n["title"] == top) {
+                Some(i) => i,
+                None => {
+                    root.push(serde_json::json!({ "title": top, "items": [] }));
+                    root.len() - 1
+                }
+            };
+            let label = if spec.menu.len() > 2 {
+                format!("{} › {}", spec.menu[1], spec.menu[2..].join(" › "))
+            } else {
+                spec.menu[1].to_string()
+            };
+            let mut item = serde_json::json!({ "label": label, "id": spec.id });
+            if let Some(k) = spec.shortcut {
+                item["key"] = serde_json::json!(k);
+            }
+            if let Some(items) = root[idx]["items"].as_array_mut() {
+                items.push(item);
+            }
+        }
+        serde_json::to_string(&root).map_err(|e| format!("menus: {e}"))
+    }
+
     /// Prompt, keyword options, log tail and the drawing epoch (the shell polls `cadState`).
     pub fn state_json(&self) -> Result<String, String> {
         let view = self.engine_view();
@@ -82,6 +115,36 @@ impl App {
             serde_json::json!({ "message": p.message, "keywords": p.keywords })
         });
         let log: Vec<String> = self.session.log.iter().rev().take(30).rev().cloned().collect();
+        let (layers, current_layer) = match self.session.doc() {
+            Ok(d) => (
+                d.layers
+                    .iter()
+                    .map(|l| {
+                        serde_json::json!({
+                            "name": l.name, "on": l.on, "frozen": l.frozen, "locked": l.locked,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                self.session.current_common().layer.clone(),
+            ),
+            Err(_) => (Vec::new(), String::new()),
+        };
+        let handles = self.session.selection();
+        let selection: Vec<serde_json::Value> = if let Ok(d) = self.session.doc() {
+            handles
+                .iter()
+                .filter_map(|h| d.model.get(*h))
+                .take(30)
+                .map(|e| {
+                    serde_json::json!({
+                        "kind": format!("{:?}", e.kind),
+                        "layer": e.common.layer,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let state = serde_json::json!({
             "ok": true,
             "epoch": self.session.doc_epoch,
@@ -90,6 +153,9 @@ impl App {
             "rasterMs": self.last_raster_ms,
             "visible": self.last_visible,
             "total": self.session.doc().map(|d| d.model.len()).unwrap_or(0),
+            "layers": layers,
+            "currentLayer": current_layer,
+            "selection": selection,
             "prompting": prompt.is_some(),
             "prompt": prompt,
             "view": { "center": [view.center.x, view.center.y], "height": view.height },

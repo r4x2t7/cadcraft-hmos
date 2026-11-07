@@ -5,7 +5,7 @@
 //
 // All pointer coordinates handed to Cad are DEVICE pixels (vp × densityPixels).
 
-import { Cad, CadState, CadView } from '../bridge/CadBridge';
+import { Cad, CadState, CadView, CadLayer, CadSel, CadMenu, CadMenuItem } from '../bridge/CadBridge';
 import picker from '@ohos.file.picker';
 import fs from '@ohos.file.fs';
 import { image } from '@kit.ImageKit';
@@ -19,7 +19,10 @@ import { KeyCode } from '@ohos.multimodalInput.keyCode';
 
 const BG: string = '#212830';
 const PANEL: string = '#2a323c';
+const PANEL_HI: string = '#333c48';
 const ACCENT: string = '#14a3c7';
+const TEXT: string = '#dfe6ee';
+const DIM: string = '#9fb0c0';
 const ACTIVE_MS: number = 1500; // pointer/key recency that keeps the render loop at 60fps
 
 class MiddleDrag {
@@ -39,8 +42,21 @@ struct Index {
   @State canvasFocused: boolean = false;
   @State lastPinch: number = 1;
   @State frameMs: string = '';
+  @State menus: CadMenu[] = [];
+  @State layers: CadLayer[] = [];
+  @State currentLayer: string = '';
+  @State selection: CadSel[] = [];
+  @State coordsText: string = '';
+  @State gridOn: boolean = true;
+  @State openMenu: number = -1;
+  @State menuX: number = 0;
+  @State crossX: number = -100;
+  @State crossY: number = -100;
   private settings: RenderingContextSettings = new RenderingContextSettings(false);
   private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
+  private overlaySettings: RenderingContextSettings = new RenderingContextSettings(true);
+  private ovlCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.overlaySettings);
+  private histScroller: Scroller = new Scroller();
   private pixelMap: image.PixelMap | null = null;
   private frameWidth: number = 0;
   private frameHeight: number = 0;
@@ -53,10 +69,12 @@ struct Index {
   private frames: number = 0;
   private lastActive: number = 0;
   private rateHigh: boolean = false;
-  // Accumulated pan offset (device px) since the last full frame — used to blit the old
-  // frame shifted during pans so navigation keeps the display instantly responsive.
   private panAccX: number = 0;
   private panAccY: number = 0;
+  // World view of the last cadState (for grid + coordinate readout math).
+  private viewCenterX: number = 0;
+  private viewCenterY: number = 0;
+  private viewHeightW: number = 0;
   // DisplaySync-driven render loop (replaces a setInterval poll): VSync-aligned, with a
   // frame-rate range the tick switches between interactive (60fps) and idle (5fps).
   // Created in aboutToAppear — constructing it as a field initializer runs before the UI
@@ -67,6 +85,7 @@ struct Index {
 
   aboutToAppear(): void {
     this.dpr = display.getDefaultDisplaySync().densityPixels;
+    this.menus = Cad.menus();
     const state: CadState = Cad.init();
     this.applyState(state);
     this.renderer = displaySync.create();
@@ -120,8 +139,12 @@ struct Index {
     this.prompt = state.prompt ? state.prompt.message : '';
     this.keywords = state.prompt ? state.prompt.keywords : [];
     if (state.log.length > 0) {
-      this.log = state.log.slice(-8);
+      this.log = state.log.slice(-12);
+      this.histScroller.scrollEdge(Edge.Bottom);
     }
+    this.layers = state.layers;
+    this.currentLayer = state.currentLayer;
+    this.selection = state.selection;
     if (state.frameMs !== undefined && state.frameMs > 0) {
       const vis: string = (state.visible !== undefined && state.total !== undefined && state.visible < state.total)
         ? ` ${state.visible}/${state.total}`
@@ -129,8 +152,11 @@ struct Index {
       this.frameMs = `渲染 ${state.frameMs.toFixed(0)}ms (建 ${state.buildMs?.toFixed(0) ?? '?'} + 画 ${state.rasterMs?.toFixed(0) ?? '?'}${vis})`;
     }
     const view: CadView = state.view;
+    this.viewCenterX = view.center[0];
+    this.viewCenterY = view.center[1];
+    this.viewHeightW = view.height;
     this.status =
-      `视图高 ${view.height.toFixed(2)} | 中心 (${view.center[0].toFixed(2)}, ${view.center[1].toFixed(2)}) | ${this.frameMs}`;
+      `视图高 ${view.height.toFixed(2)} | ${this.frameMs}`;
   }
 
   // ---------------- canvas ----------------
@@ -175,10 +201,43 @@ struct Index {
         await this.pixelMap.writePixels(area);
       }
       this.context.drawImage(this.pixelMap, 0, 0, this.canvasW, this.canvasH);
+      this.drawGrid();
       this.panAccX = 0;
       this.panAccY = 0;
     } catch (e) {
       this.status = `渲染: ${e}`;
+    }
+  }
+
+  /** Draw the world grid (1-2-5 series, ~10 divisions) over the frame. */
+  drawGrid(): void {
+    if (!this.gridOn || !(this.viewHeightW > 0) || this.canvasW <= 0) {
+      return;
+    }
+    const scale: number = this.canvasW / this.viewHeightW; // vp per world unit
+    const raw: number = this.viewHeightW / 10;
+    const p: number = Math.pow(10, Math.floor(Math.log10(raw)));
+    const r: number = raw / p;
+    const step: number = (r < 1.5 ? 1 : r < 3.5 ? 2 : r < 7.5 ? 5 : 10) * p;
+    const worldLeft: number = this.viewCenterX - this.canvasW / 2 / scale;
+    const worldTop: number = this.viewCenterY + this.canvasH / 2 / scale;
+    this.context.strokeStyle = 'rgba(255,255,255,0.08)';
+    this.context.lineWidth = 1;
+    let wx: number = Math.ceil(worldLeft / step) * step;
+    for (; (wx - worldLeft) * scale <= this.canvasW; wx += step) {
+      const sx: number = (wx - worldLeft) * scale;
+      this.context.beginPath();
+      this.context.moveTo(sx, 0);
+      this.context.lineTo(sx, this.canvasH);
+      this.context.stroke();
+    }
+    let wy: number = Math.ceil((worldTop - this.canvasH / scale) / step) * step;
+    for (; (worldTop - wy) * scale <= this.canvasH; wy += step) {
+      const sy: number = (worldTop - wy) * scale;
+      this.context.beginPath();
+      this.context.moveTo(0, sy);
+      this.context.lineTo(this.canvasW, sy);
+      this.context.stroke();
     }
   }
 
@@ -191,10 +250,39 @@ struct Index {
     this.context.fillRect(0, 0, this.canvasW, this.canvasH);
     this.context.drawImage(this.pixelMap, this.panAccX / this.dpr, this.panAccY / this.dpr,
       this.canvasW, this.canvasH);
+    this.drawGrid();
+  }
+
+  /** Crosshair overlay on the transparent second canvas (cheap: 2 lines + pickbox). */
+  drawCrosshair(): void {
+    this.ovlCtx.clearRect(0, 0, this.canvasW, this.canvasH);
+    if (this.crossX < 0 || this.crossY < 0) {
+      return;
+    }
+    this.ovlCtx.strokeStyle = 'rgba(223,230,238,0.75)';
+    this.ovlCtx.lineWidth = 1;
+    this.ovlCtx.beginPath();
+    this.ovlCtx.moveTo(0, this.crossY);
+    this.ovlCtx.lineTo(this.canvasW, this.crossY);
+    this.ovlCtx.moveTo(this.crossX, 0);
+    this.ovlCtx.lineTo(this.crossX, this.canvasH);
+    this.ovlCtx.stroke();
+    this.ovlCtx.strokeRect(this.crossX - 6, this.crossY - 6, 12, 12);
   }
 
   device(xVp: number, yVp: number): number[] {
     return [xVp * this.dpr, yVp * this.dpr];
+  }
+
+  /** World coordinates of a canvas vp point, for the status bar readout. */
+  worldText(xVp: number, yVp: number): string {
+    if (!(this.viewHeightW > 0) || this.canvasW <= 0) {
+      return '';
+    }
+    const scale: number = this.canvasW / this.viewHeightW;
+    const wx: number = this.viewCenterX + (xVp - this.canvasW / 2) / scale;
+    const wy: number = this.viewCenterY - (yVp - this.canvasH / 2) / scale;
+    return `${wx.toFixed(2)}, ${wy.toFixed(2)}`;
   }
 
   // ---------------- interactions ----------------
@@ -202,6 +290,10 @@ struct Index {
   handleMouse(event: MouseEvent): void {
     this.markActive();
     const p: number[] = this.device(event.x, event.y);
+    this.crossX = event.x;
+    this.crossY = event.y;
+    this.coordsText = this.worldText(event.x, event.y);
+    this.drawCrosshair();
     if (event.action === MouseAction.Move) {
       Cad.move(p[0], p[1]);
       if (this.middle.down) {
@@ -425,6 +517,13 @@ struct Index {
     this.dirty = true;
   }
 
+  runMenu(id: string): void {
+    this.openMenu = -1;
+    // 菜单命令统一从命令行走：引擎解析别名并按需启动交互提示，与桌面一致。
+    this.applyState(Cad.cmdline(id));
+    this.dirty = true;
+  }
+
   // ---------------- UI ----------------
 
   /** 画布右键菜单（2in1 体验规范：右键菜单或更多操作入口）。 */
@@ -449,34 +548,17 @@ struct Index {
 
   @Builder
   menuBar() {
-    Row({ space: 4 }) {
-      Button('打开')
-        .fontSize(13).height(30).padding({ left: 10, right: 10 })
-        .backgroundColor(PANEL).fontColor('#dfe6ee')
-        .onClick(() => this.openDxf())
-      Button('保存')
-        .fontSize(13).height(30).padding({ left: 10, right: 10 })
-        .backgroundColor(PANEL).fontColor('#dfe6ee')
-        .onClick(() => this.saveDxf())
-      Button('打印')
-        .fontSize(13).height(30).padding({ left: 10, right: 10 })
-        .backgroundColor(PANEL).fontColor('#dfe6ee')
-        .onClick(() => this.printView())
-      Button('缩放范围')
-        .fontSize(13).height(30).padding({ left: 10, right: 10 })
-        .backgroundColor(PANEL).fontColor('#dfe6ee')
-        .onClick(() => {
-          this.applyState(Cad.zoomExtents());
-          this.dirty = true;
-        })
-      Button('UNDO')
-        .fontSize(13).height(30).padding({ left: 10, right: 10 })
-        .backgroundColor(PANEL).fontColor('#dfe6ee')
-        .onClick(() => this.keyword('undo'))
-      Button('REDO')
-        .fontSize(13).height(30).padding({ left: 10, right: 10 })
-        .backgroundColor(PANEL).fontColor('#dfe6ee')
-        .onClick(() => this.keyword('redo'))
+    Row({ space: 2 }) {
+      ForEach(this.menus, (m: CadMenu, idx: number) => {
+        Button(m.title)
+          .fontSize(13).height(30).padding({ left: 10, right: 10 })
+          .backgroundColor(this.openMenu === idx ? PANEL_HI : PANEL)
+          .fontColor(TEXT)
+          .onClick((e: ClickEvent) => {
+            this.menuX = Math.max(4, e.x - 10);
+            this.openMenu = this.openMenu === idx ? -1 : idx;
+          })
+      }, (m: CadMenu) => m.title)
       Blank()
       Text('HoCAD').fontSize(13).fontColor(ACCENT).margin({ right: 8 })
     }
@@ -496,7 +578,7 @@ struct Index {
             .height(30)
             .fontSize(12)
             .backgroundColor(PANEL)
-            .fontColor('#dfe6ee')
+            .fontColor(TEXT)
             .onClick(() => this.startCommand(c))
         }, (c: string) => c)
         Text('修改').fontSize(12).fontColor(ACCENT).margin({ top: 8 })
@@ -506,7 +588,7 @@ struct Index {
             .height(30)
             .fontSize(12)
             .backgroundColor(PANEL)
-            .fontColor('#dfe6ee')
+            .fontColor(TEXT)
             .onClick(() => this.startCommand(c))
         }, (c: string) => c)
       }
@@ -517,142 +599,264 @@ struct Index {
     .scrollBar(BarState.Auto)
   }
 
-  build() {
-    Row({ space: 4 }) {
-      Column() {
-        this.toolColumn()
-      }
-      .width(100)
-
-      Column() {
-        this.menuBar()
-
-        // Canvas: click to pick, middle-drag / two-finger pan (old-frame blit), pinch zoom,
-        // right-click menu, drag & drop a DXF to open.
-        Stack({ alignContent: Alignment.BottomEnd }) {
-          Canvas(this.context)
-            .width('100%')
-            .height('100%')
-            .backgroundColor(BG)
-            .onReady(() => this.onCanvasReady())
-            .onMouse((event: MouseEvent) => this.handleMouse(event))
-            .onTouch((event: TouchEvent) => this.handleTouch(event))
-            .onKeyEvent((event: KeyEvent) => this.handleKey(event))
-            // 焦点反馈（2in1 体验规范）：画布聚焦时描边高亮；点击即聚焦使快捷键生效。
-            .focusable(true)
-            .focusOnTouch(true)
-            .onFocus(() => {
-              this.canvasFocused = true;
-            })
-            .onBlur(() => {
-              this.canvasFocused = false;
-            })
-            .border({ width: 1, color: this.canvasFocused ? ACCENT : '#00000000' })
-            .allowDrop([uniformTypeDescriptor.UniformDataType.FILE])
-            .onDrop((event: DragEvent) => {
-              const data: unifiedDataChannel.UnifiedData = event.getData();
-              const records: unifiedDataChannel.UnifiedRecord[] = data.getRecords();
-              for (const rec of records) {
-                const file: unifiedDataChannel.File = rec as unifiedDataChannel.File;
-                if (file.uri && file.uri.toLowerCase().endsWith('.dxf')) {
-                  this.openUri(file.uri);
-                }
-              }
-            })
-            .bindContextMenu(this.canvasMenu, ResponseType.RightClick)
-            .gesture(PinchGesture({ fingers: 2 })
-              .onActionUpdate((event: GestureEvent) => this.handlePinch(event)))
-          // 触屏/注入用缩放钮：+ / − / 缩放范围（键鼠走滚轮与右键菜单）。
-          Column({ space: 6 }) {
-            Button('+')
-              .width(34).height(34).fontSize(18)
-              .backgroundColor(PANEL).fontColor('#dfe6ee')
-              .onClick(() => {
-                const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
-                this.applyState(Cad.zoom(1.25, p[0], p[1]));
-                this.dirty = true;
-              })
-            Button('−')
-              .width(34).height(34).fontSize(18)
-              .backgroundColor(PANEL).fontColor('#dfe6ee')
-              .onClick(() => {
-                const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
-                this.applyState(Cad.zoom(0.8, p[0], p[1]));
-                this.dirty = true;
-              })
-            Button('⌂')
-              .width(34).height(34).fontSize(14)
-              .backgroundColor(PANEL).fontColor('#dfe6ee')
-              .onClick(() => {
-                this.applyState(Cad.zoomExtents());
-                this.dirty = true;
-              })
-          }
-          .margin(10)
-        }
-        .layoutWeight(1)
-
-        // Command line: prompt + keywords + input + history, like the desktop's bottom strip.
+  /** 右侧图层列表：行点击 = 置为当前层（engine layer.current）。 */
+  @Builder
+  layersPanel() {
+    Column({ space: 2 }) {
+      Text('图层').fontSize(12).fontColor(ACCENT).margin({ top: 8 })
+      Scroll() {
         Column({ space: 2 }) {
-          Row({ space: 6 }) {
-            Text(this.prompt.length > 0 ? this.prompt : '命令:')
-              .fontSize(13)
-              .fontColor(ACCENT)
-            ForEach(this.keywords, (kw: string) => {
-              Text(kw)
-                .fontSize(12)
-                .fontColor('#8fd8ef')
-                .padding(4)
-                .border({ width: 1, color: '#3a4450', radius: 4 })
-                .onClick(() => this.keyword(kw))
-            }, (kw: string) => kw)
-          }
-          .width('100%')
-          .padding({ left: 6, right: 6 })
-
-          TextInput({ text: this.cmdText, placeholder: '输入命令或坐标，如 circle 0,0 5' })
+          ForEach(this.layers, (l: CadLayer) => {
+            Row({ space: 4 }) {
+              Text(this.currentLayer === l.name ? '▸' : ' ')
+                .fontSize(12).fontColor(ACCENT).width(12)
+              Text(l.name)
+                .fontSize(11).fontColor(l.on ? TEXT : DIM)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+              if (l.locked) {
+                Text('锁').fontSize(9).fontColor(DIM)
+              }
+              if (l.frozen) {
+                Text('冻').fontSize(9).fontColor(DIM)
+              }
+              if (!l.on) {
+                Text('关').fontSize(9).fontColor(DIM)
+              }
+            }
             .width('100%')
-            .height(32)
-            .fontSize(13)
-            .onChange((v: string) => {
-              this.cmdText = v;
+            .padding({ left: 4, right: 2, top: 3, bottom: 3 })
+            .borderRadius(3)
+            .backgroundColor(this.currentLayer === l.name ? PANEL_HI : Color.Transparent)
+            .onClick(() => {
+              const p: Record<string, string> = { 'name': l.name };
+              this.applyState(Cad.execute('layer.current', p));
+              this.dirty = true;
             })
-            .onSubmit(() => this.submitCmd())
-
-          ForEach(this.log.slice(-4), (line: string) => {
-            Text(line)
-              .fontSize(11)
-              .fontColor('#9fb0c0')
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
-              .padding({ left: 6 })
-          }, (line: string, i: number) => `${i}-${line}`)
+          }, (l: CadLayer) => `${l.name}-${l.on}-${l.frozen}-${l.locked}-${this.currentLayer}`)
         }
         .width('100%')
-        .padding({ top: 4, bottom: 4 })
-        .backgroundColor(PANEL)
-
-        Text(this.status)
-          .fontSize(11)
-          .fontColor('#7d8ea0')
-          .width('100%')
-          .height(20)
-          .padding({ left: 6 })
       }
+      .scrollBar(BarState.Auto)
       .layoutWeight(1)
+    }
+    .layoutWeight(1)
+  }
 
-      // Properties (right) — v1 shows live view/state; layers/styles read via cadState in v2.
-      Column({ space: 4 }) {
-        Text('视图').fontSize(12).fontColor(ACCENT).margin({ top: 8 })
-        Text(this.status).fontSize(10).fontColor('#9fb0c0')
-        Text('图层').fontSize(12).fontColor(ACCENT).margin({ top: 12 })
-        Text('v2: 图层 / 特性面板\n（engine 直驱）').fontSize(10).fontColor('#7d8ea0')
+  /** 右侧特性面板：选中实体的类型与图层（只读 v1）。 */
+  @Builder
+  propertiesPanel() {
+    Column({ space: 2 }) {
+      Text('特性').fontSize(12).fontColor(ACCENT)
+      if (this.selection.length === 0) {
+        Text('未选择对象').fontSize(10).fontColor(DIM)
+      } else {
+        Scroll() {
+          Column({ space: 2 }) {
+            ForEach(this.selection, (s: CadSel, i: number) => {
+              Column({ space: 0 }) {
+                Text(s.kind).fontSize(10).fontColor(TEXT).maxLines(1)
+                Text(s.layer).fontSize(9).fontColor(DIM).maxLines(1)
+              }
+              .width('100%')
+              .padding(3)
+              .borderRadius(3)
+              .backgroundColor(PANEL)
+            }, (s: CadSel, i: number) => `${i}-${s.kind}-${s.layer}`)
+          }
+          .width('100%')
+        }
+        .scrollBar(BarState.Auto)
+        .layoutWeight(1)
       }
-      .width(120)
-      .alignItems(HorizontalAlign.Start)
-      .backgroundColor(BG)
-      .padding(6)
+    }
+    .layoutWeight(1)
+  }
+
+  build() {
+    Stack() {
+      Column() {
+        Row({ space: 4 }) {
+          Column() {
+            this.toolColumn()
+          }
+          .width(96)
+
+          Column() {
+            this.menuBar()
+
+            // Canvas + crosshair overlay: click to pick, middle-drag / two-finger pan (old
+            // frame blit), pinch zoom, right-click menu, drag & drop a DXF to open.
+            Stack({ alignContent: Alignment.BottomEnd }) {
+              Canvas(this.context)
+                .width('100%')
+                .height('100%')
+                .backgroundColor(BG)
+                .onReady(() => this.onCanvasReady())
+                .onMouse((event: MouseEvent) => this.handleMouse(event))
+                .onTouch((event: TouchEvent) => this.handleTouch(event))
+                .onKeyEvent((event: KeyEvent) => this.handleKey(event))
+                // 焦点反馈（2in1 体验规范）：画布聚焦时描边高亮；点击即聚焦使快捷键生效。
+                .focusable(true)
+                .focusOnTouch(true)
+                .onFocus(() => {
+                  this.canvasFocused = true;
+                })
+                .onBlur(() => {
+                  this.canvasFocused = false;
+                })
+                .border({ width: 1, color: this.canvasFocused ? ACCENT : '#00000000' })
+                .allowDrop([uniformTypeDescriptor.UniformDataType.FILE])
+                .onDrop((event: DragEvent) => {
+                  const data: unifiedDataChannel.UnifiedData = event.getData();
+                  const records: unifiedDataChannel.UnifiedRecord[] = data.getRecords();
+                  for (const rec of records) {
+                    const file: unifiedDataChannel.File = rec as unifiedDataChannel.File;
+                    if (file.uri && file.uri.toLowerCase().endsWith('.dxf')) {
+                      this.openUri(file.uri);
+                    }
+                  }
+                })
+                .bindContextMenu(this.canvasMenu, ResponseType.RightClick)
+                .gesture(PinchGesture({ fingers: 2 })
+                  .onActionUpdate((event: GestureEvent) => this.handlePinch(event)))
+              Canvas(this.ovlCtx)
+                .width('100%')
+                .height('100%')
+                .hitTestBehavior(HitTestMode.None)
+                .onReady(() => this.drawCrosshair())
+              Column({ space: 6 }) {
+                Button('+')
+                  .width(34).height(34).fontSize(18)
+                  .backgroundColor(PANEL).fontColor(TEXT)
+                  .onClick(() => {
+                    const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
+                    this.applyState(Cad.zoom(1.25, p[0], p[1]));
+                    this.dirty = true;
+                  })
+                Button('−')
+                  .width(34).height(34).fontSize(18)
+                  .backgroundColor(PANEL).fontColor(TEXT)
+                  .onClick(() => {
+                    const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
+                    this.applyState(Cad.zoom(0.8, p[0], p[1]));
+                    this.dirty = true;
+                  })
+                Button('⌂')
+                  .width(34).height(34).fontSize(14)
+                  .backgroundColor(PANEL).fontColor(TEXT)
+                  .onClick(() => {
+                    this.applyState(Cad.zoomExtents());
+                    this.dirty = true;
+                  })
+              }
+              .margin(10)
+            }
+            .layoutWeight(1)
+
+            // Command line: history + prompt + keywords + input, like the desktop's strip.
+            Row({ space: 4 }) {
+              Column({ space: 2 }) {
+                Text(this.prompt.length > 0 ? this.prompt : '命令:')
+                  .fontSize(12)
+                  .fontColor(ACCENT)
+                Scroll(this.histScroller) {
+                  Column({ space: 1 }) {
+                    ForEach(this.log, (line: string, i: number) => {
+                      Text(line)
+                        .fontSize(10)
+                        .fontColor(DIM)
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .width('100%')
+                    }, (line: string, i: number) => `${i}-${line}`)
+                  }
+                  .width('100%')
+                }
+                .scrollBar(BarState.Off)
+                .layoutWeight(1)
+
+                TextInput({ text: this.cmdText, placeholder: '输入命令或坐标，如 circle 0,0 5' })
+                  .width('100%')
+                  .height(30)
+                  .fontSize(13)
+                  .onChange((v: string) => {
+                    this.cmdText = v;
+                  })
+                  .onSubmit(() => this.submitCmd())
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+            }
+            .width('100%')
+            .height(110)
+            .padding({ left: 6, right: 6, top: 4, bottom: 4 })
+            .backgroundColor(PANEL)
+
+            Row({ space: 8 }) {
+              Text(this.coordsText.length > 0 ? this.coordsText : '0.00, 0.00')
+                .fontSize(11)
+                .fontColor(TEXT)
+                .layoutWeight(1)
+              Button(this.gridOn ? '栅格 ✓' : '栅格')
+                .fontSize(10).height(22).padding({ left: 6, right: 6 })
+                .backgroundColor(PANEL).fontColor(DIM)
+                .onClick(() => {
+                  this.gridOn = !this.gridOn;
+                  this.dirty = true;
+                })
+              Text(this.status).fontSize(10).fontColor(DIM)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(2)
+            }
+            .width('100%')
+            .height(26)
+            .padding({ left: 6, right: 6 })
+          }
+          .layoutWeight(1)
+        }
+        .layoutWeight(1)
+      }
+      .width('100%')
+      .height('100%')
+
+      // 系统下拉菜单（真菜单栏）：点空白关闭的遮罩。
+      if (this.openMenu >= 0 && this.openMenu < this.menus.length) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .onClick(() => {
+            this.openMenu = -1;
+          })
+      }
+      // 下拉菜单面板：菜单栏下方、按钮 x 处。
+      if (this.openMenu >= 0 && this.openMenu < this.menus.length) {
+        Column({ space: 1 }) {
+          ForEach(this.menus[this.openMenu].items, (it: CadMenuItem) => {
+            Row({ space: 6 }) {
+              Text(it.label)
+                .fontSize(12)
+                .fontColor(TEXT)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+              if (it.key) {
+                Text(it.key).fontSize(10).fontColor(DIM)
+              }
+            }
+            .width('100%')
+            .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+            .borderRadius(3)
+            .onClick(() => this.runMenu(it.id))
+          }, (it: CadMenuItem) => `${it.id}-${it.label}`)
+        }
+        .width(260)
+        .padding(4)
+        .borderRadius(6)
+        .backgroundColor(PANEL_HI)
+        .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
+        .position({ x: this.menuX, y: 40 })
+      }
     }
     .width('100%')
     .height('100%')

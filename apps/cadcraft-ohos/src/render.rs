@@ -22,7 +22,11 @@ pub fn frame_into(app: &mut App, out: &mut [u8]) -> usize {
     let view = st.view();
     let (center, height) = (view.center, view.height);
     let (w, h) = (app.width, app.height);
-    let scale = f64::from(w) / height.max(1e-9);
+    // Pixels per world unit must be derived from the *canvas height*: view.height is a
+    // world-space height, and raster::View::world_bounds()/to_screen() both use
+    // height / scale. Using canvas width here doubled the scale, cropped the lower
+    // half of the drawing and left a blank band under the geometry.
+    let scale = f64::from(h) / height.max(1e-9);
     if !(scale.is_finite() && scale > 0.0) {
         return 0;
     }

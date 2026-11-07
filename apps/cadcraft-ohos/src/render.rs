@@ -61,19 +61,30 @@ pub fn frame(app: &mut App) -> Vec<u8> {
     let covers_drawing = ext.is_empty()
         || (culled.min.x <= ext.min.x && culled.min.y <= ext.min.y
             && culled.max.x >= ext.max.x && culled.max.y >= ext.max.y);
+    // Rubber-band preview: while a command prompts, its preview entities (the line
+    // following the cursor, drag ghosts, …) render with the frame, exactly like the
+    // desktop canvas. The engine tracks the cursor via cadMove.
+    let preview = app.session.preview(app.session.cursor);
     let list = if covers_drawing {
         app.last_visible = total;
-        cadcraft_render::build(d, &space, &opts)
+        cadcraft_render::build_entities(
+            d,
+            d.model.iter().map(|e| e.as_ref()).chain(preview.iter()),
+            &opts,
+        )
     } else {
         let visible: Vec<&cadcraft_doc::Entity> = d
             .model
             .iter()
             .filter(|e| cadcraft_doc::entity_bounds(d, e, 0).intersects(&culled))
             .map(|e| e.as_ref())
+            .chain(preview.iter())
             .collect();
         app.last_visible = visible.len();
         cadcraft_render::build_entities(d, visible, &opts)
     };
+    drop(d);
+    drop(preview);
     let build_ms = build_started.elapsed().as_secs_f64() * 1000.0;
 
     // ---- raster ----------------------------------------------------------------

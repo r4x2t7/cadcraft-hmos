@@ -91,6 +91,12 @@ struct Index {
   @State ortho: boolean = false;
   @State osnap: boolean = false;
   @State windowFrom: number[] | null = null;
+  @State suggestions: string[] = [];
+  @State layerNewOpen: boolean = false;
+  @State newLayerName: string = '';
+  @State ctxLayer: string = '';
+  @State ctxOpen: boolean = false;
+  private allIds: string[] = [];
   private settings: RenderingContextSettings = new RenderingContextSettings(false);
   private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
   private overlaySettings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -127,6 +133,12 @@ struct Index {
   aboutToAppear(): void {
     this.dpr = display.getDefaultDisplaySync().densityPixels;
     this.menus = Cad.menus();
+    // Flat command ids for the command-line autocomplete.
+    for (const m of this.menus) {
+      for (const it of m.items) {
+        this.allIds.push(it.id);
+      }
+    }
     const state: CadState = Cad.init();
     this.applyState(state);
     this.renderer = displaySync.create();
@@ -322,6 +334,21 @@ struct Index {
         Math.abs(this.crossX - fx), Math.abs(this.crossY - fy));
       this.ovlCtx.setLineDash([]);
     }
+    // UCS 图标（右下角）：红 X / 绿 Y，桌面同款方位提示。
+    const ux: number = this.canvasW - 30;
+    const uy: number = this.canvasH - 16;
+    this.ovlCtx.lineWidth = 2;
+    this.ovlCtx.strokeStyle = 'rgba(224,80,80,0.9)';
+    this.ovlCtx.beginPath();
+    this.ovlCtx.moveTo(ux, uy);
+    this.ovlCtx.lineTo(ux + 14, uy);
+    this.ovlCtx.stroke();
+    this.ovlCtx.strokeStyle = 'rgba(90,200,110,0.9)';
+    this.ovlCtx.beginPath();
+    this.ovlCtx.moveTo(ux, uy);
+    this.ovlCtx.lineTo(ux, uy - 14);
+    this.ovlCtx.stroke();
+    this.ovlCtx.lineWidth = 1;
     if (this.crossX < 0 || this.crossY < 0) {
       return;
     }
@@ -373,9 +400,11 @@ struct Index {
         this.blitPanned();
         this.dirty = this.frames % 3 === 0; // full re-render throttled; blit keeps it smooth
       }
-      // Hover moves only move the crosshair overlay (drawn above) and the engine cursor:
-      // the emulator re-sends Move every vsync, so a full re-render here would spin at
-      // ~14fps forever (the ANR we hit). Rubber-band previews redraw on real input.
+      // Hover moves only move the crosshair overlay (drawn above) and the engine cursor;
+      // while a command prompts, re-render so the rubber-band preview follows the cursor.
+      // Idle hover must NOT re-render: the emulator re-sends Move every vsync and a full
+      // re-render per Move spun at ~14fps forever (the ANR we hit).
+      this.dirty = this.prompt.length > 0;
       return;
     }
     if (event.action === MouseAction.Press) {
@@ -605,6 +634,32 @@ struct Index {
     this.dirty = true;
   }
 
+  /** 图层行 ⋯ 面板的动作（全部走引擎命令：layer.current / layer.set / layer.delete）。 */
+  layerAction(act: string): void {
+    const name: string = this.ctxLayer;
+    const layer = this.layers.find((l: CadLayer) => l.name === name);
+    if (act === '置当前') {
+      const p: Record<string, string> = { 'name': name };
+      this.applyState(Cad.execute('layer.current', p));
+    } else if (act === '显示/隐藏') {
+      const on = layer ? !layer.on : true;
+      const p: Record<string, string | boolean> = { 'name': name, 'on': on };
+      this.applyState(Cad.execute('layer.set', p));
+    } else if (act === '冻结/解冻') {
+      const frozen = layer ? !layer.frozen : true;
+      const p: Record<string, string | boolean> = { 'name': name, 'frozen': frozen };
+      this.applyState(Cad.execute('layer.set', p));
+    } else if (act === '锁定/解锁') {
+      const locked = layer ? !layer.locked : true;
+      const p: Record<string, string | boolean> = { 'name': name, 'locked': locked };
+      this.applyState(Cad.execute('layer.set', p));
+    } else if (act === '删除图层') {
+      const p: Record<string, string> = { 'name': name };
+      this.applyState(Cad.execute('layer.delete', p));
+    }
+    this.dirty = true;
+  }
+
   // ---------------- UI ----------------
 
   /** 画布右键菜单（2in1 体验规范：右键菜单或更多操作入口）。 */
@@ -684,7 +739,17 @@ struct Index {
   @Builder
   layersPanel() {
     Column({ space: 2 }) {
-      Text('图层').fontSize(12).fontColor(ACCENT).margin({ top: 8 })
+      Row({ space: 4 }) {
+        Text('图层').fontSize(12).fontColor(ACCENT)
+        Blank()
+        Button('＋')
+          .fontSize(11).height(20).padding({ left: 5, right: 5 })
+          .backgroundColor(PANEL).fontColor(TEXT)
+          .onClick(() => {
+            this.layerNewOpen = true;
+          })
+      }
+      .width('100%')
       Scroll() {
         Column({ space: 2 }) {
           ForEach(this.layers, (l: CadLayer) => {
@@ -708,6 +773,12 @@ struct Index {
               if (!l.on) {
                 Text('关').fontSize(9).fontColor(DIM)
               }
+              Text('⋯')
+                .fontSize(11).fontColor(DIM).width(14)
+                .onClick(() => {
+                  this.ctxLayer = l.name;
+                  this.ctxOpen = true;
+                })
             }
             .width('100%')
             .padding({ left: 4, right: 2, top: 3, bottom: 3 })
@@ -893,12 +964,36 @@ struct Index {
                 .scrollBar(BarState.Off)
                 .layoutWeight(1)
 
+                if (this.suggestions.length > 0) {
+                  Row({ space: 4 }) {
+                    ForEach(this.suggestions, (id: string) => {
+                      Text(id)
+                        .fontSize(10)
+                        .fontColor(TEXT)
+                        .padding({ left: 6, right: 6, top: 3, bottom: 3 })
+                        .borderRadius(3)
+                        .backgroundColor(PANEL_HI)
+                        .onClick(() => {
+                          this.cmdText = id;
+                          this.suggestions = [];
+                        })
+                    }, (id: string) => id)
+                  }
+                  .width('100%')
+                }
                 TextInput({ text: this.cmdText, placeholder: '输入命令或坐标，如 circle 0,0 5' })
                   .width('100%')
                   .height(30)
                   .fontSize(13)
                   .onChange((v: string) => {
                     this.cmdText = v;
+                    // 命令补全：按前缀过滤命令 id（最多 6 条，点击填入输入框）。
+                    const t = v.trim().toLowerCase();
+                    if (t.length > 0) {
+                      this.suggestions = this.allIds.filter((id: string) => id.startsWith(t)).slice(0, 6);
+                    } else {
+                      this.suggestions = [];
+                    }
                   })
                   .onSubmit(() => this.submitCmd())
               }
@@ -993,6 +1088,85 @@ struct Index {
         .backgroundColor(PANEL_HI)
         .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
         .position({ x: this.menuX, y: 40 })
+      }
+
+      // 图层动作面板（图层行 ⋯ 打开）：置当前 / 开关 / 冻结 / 锁定 / 删除。
+      if (this.ctxOpen) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .onClick(() => {
+            this.ctxOpen = false;
+          })
+      }
+      if (this.ctxOpen) {
+        Column({ space: 1 }) {
+          Text(this.ctxLayer).fontSize(11).fontColor(ACCENT).padding(6)
+          ForEach(['置当前', '显示/隐藏', '冻结/解冻', '锁定/解锁', '删除图层'], (act: string) => {
+            Text(act)
+              .fontSize(12).fontColor(TEXT)
+              .width('100%')
+              .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+              .onClick(() => {
+                this.layerAction(act);
+                this.ctxOpen = false;
+              })
+          }, (act: string) => act)
+        }
+        .width(180)
+        .padding(4)
+        .borderRadius(6)
+        .backgroundColor(PANEL_HI)
+        .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
+        .position({ x: this.canvasW - 190, y: 60 })
+      }
+
+      // 新建图层弹窗。
+      if (this.layerNewOpen) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('rgba(0,0,0,0.4)')
+          .onClick(() => {
+            this.layerNewOpen = false;
+          })
+      }
+      if (this.layerNewOpen) {
+        Column({ space: 8 }) {
+          Text('新建图层').fontSize(14).fontColor(TEXT)
+          TextInput({ placeholder: '图层名' })
+            .width(200)
+            .height(34)
+            .onChange((v: string) => {
+              this.newLayerName = v;
+            })
+          Row({ space: 8 }) {
+            Button('取消')
+              .fontSize(12).height(30)
+              .backgroundColor(PANEL).fontColor(TEXT)
+              .onClick(() => {
+                this.layerNewOpen = false;
+                this.newLayerName = '';
+              })
+            Button('创建')
+              .fontSize(12).height(30)
+              .backgroundColor(ACCENT).fontColor('#0b1a20')
+              .onClick(() => {
+                const name = this.newLayerName.trim();
+                if (name.length > 0) {
+                  const p: Record<string, string | boolean> = { 'name': name, 'current': true };
+                  this.applyState(Cad.execute('layer.new', p));
+                  this.dirty = true;
+                }
+                this.layerNewOpen = false;
+                this.newLayerName = '';
+              })
+          }
+        }
+        .padding(14)
+        .borderRadius(8)
+        .backgroundColor(PANEL_HI)
+        .position({ x: this.canvasW / 2 - 120, y: this.canvasH / 2 - 60 })
       }
     }
     .width('100%')

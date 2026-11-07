@@ -103,6 +103,7 @@ unsafe extern "C" fn init(env: ffi::Env, exports: ffi::Value) -> ffi::Value {
         ("cadOpenDxf", Some(cad_open_dxf)),
         ("cadSaveDxf", Some(cad_save_dxf)),
         ("cadState", Some(cad_state)),
+        ("cadDocSwitch", Some(cad_doc_switch)),
         ("cadFrame", Some(cad_frame)),
     ];
     let props: Vec<(std::ffi::CString, ffi::PropertyDescriptor)> =
@@ -278,6 +279,15 @@ unsafe extern "C" fn cad_save_dxf(env: ffi::Env, info: ffi::CallbackInfo) -> ffi
 unsafe extern "C" fn cad_state(env: ffi::Env, info: ffi::CallbackInfo) -> ffi::Value {
     let _ = ffi::args(env, info);
     js_result(env, with_app(|app| app.state_json()))
+}
+
+unsafe extern "C" fn cad_doc_switch(env: ffi::Env, info: ffi::CallbackInfo) -> ffi::Value {
+    let a = ffi::args(env, info);
+    let index = a.first().copied().and_then(|v| ffi::arg_f64(env, v));
+    match index {
+        Some(i) if i >= 0.0 => js_result(env, with_app(|app| app.doc_switch(i as usize))),
+        _ => ffi::js_error(env, "cadDocSwitch(index)"),
+    }
 }
 
 unsafe extern "C" fn cad_frame(env: ffi::Env, info: ffi::CallbackInfo) -> ffi::Value {

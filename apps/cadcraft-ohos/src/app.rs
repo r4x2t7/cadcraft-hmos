@@ -108,9 +108,16 @@ impl App {
         serde_json::to_string(&root).map_err(|e| format!("menus: {e}"))
     }
 
+    /// Switch the active document tab (the engine exposes `docs`/`active` directly).
+    pub fn doc_switch(&mut self, index: usize) -> Result<String, String> {
+        if index < self.session.docs.len() {
+            self.session.active = index;
+        }
+        self.state_json()
+    }
+
     /// Prompt, keyword options, log tail and the drawing epoch (the shell polls `cadState`).
-    pub fn state_json(&self) -> Result<String, String> {
-        let view = self.engine_view();
+    pub fn state_json(&self) -> Result<String, String> {        let view = self.engine_view();
         let prompt = self.session.current_prompt().map(|p| {
             serde_json::json!({ "message": p.message, "keywords": p.keywords })
         });
@@ -145,6 +152,31 @@ impl App {
         } else {
             Vec::new()
         };
+        // Space / layouts / docs / modes / pending selection window, for the shell's tabs
+        // and status bar.
+        let space = self.session.space();
+        let space_name = match space {
+            cadcraft_doc::Space::Model => "模型".to_string(),
+            cadcraft_doc::Space::Paper(ref n) => format!("布局 {n}"),
+        };
+        let layouts: Vec<String> = self
+            .session
+            .doc()
+            .map(|d| d.layouts.iter().map(|l| l.name.clone()).collect())
+            .unwrap_or_default();
+        let docs: Vec<String> = self.session.docs.iter().map(|st| st.title.clone()).collect();
+        let ortho = matches!(
+            cadcraft_engine::sysvars::get(&self.session, "ORTHOMODE"),
+            Some(serde_json::Value::Number(ref n)) if n.as_i64().unwrap_or(0) != 0
+        );
+        let osnap = matches!(
+            cadcraft_engine::sysvars::get(&self.session, "OSMODE"),
+            Some(serde_json::Value::Number(ref n)) if n.as_i64().unwrap_or(0) != 0
+        );
+        let window = self
+            .session
+            .pending_window
+            .map(|w| serde_json::json!([w.corner.x, w.corner.y]));
         let state = serde_json::json!({
             "ok": true,
             "epoch": self.session.doc_epoch,
@@ -156,6 +188,13 @@ impl App {
             "layers": layers,
             "currentLayer": current_layer,
             "selection": selection,
+            "space": space_name,
+            "layouts": layouts,
+            "docs": docs,
+            "doc": self.session.active,
+            "ortho": ortho,
+            "osnap": osnap,
+            "window": window,
             "prompting": prompt.is_some(),
             "prompt": prompt,
             "view": { "center": [view.center.x, view.center.y], "height": view.height },

@@ -52,6 +52,13 @@ struct Index {
   @State menuX: number = 0;
   @State crossX: number = -100;
   @State crossY: number = -100;
+  @State spaceName: string = '模型';
+  @State layouts: string[] = [];
+  @State docs: string[] = [];
+  @State docIdx: number = 0;
+  @State ortho: boolean = false;
+  @State osnap: boolean = false;
+  @State windowFrom: number[] | null = null;
   private settings: RenderingContextSettings = new RenderingContextSettings(false);
   private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
   private overlaySettings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -145,6 +152,13 @@ struct Index {
     this.layers = state.layers;
     this.currentLayer = state.currentLayer;
     this.selection = state.selection;
+    this.spaceName = state.space;
+    this.layouts = state.layouts;
+    this.docs = state.docs;
+    this.docIdx = state.doc;
+    this.ortho = state.ortho;
+    this.osnap = state.osnap;
+    this.windowFrom = state.window;
     if (state.frameMs !== undefined && state.frameMs > 0) {
       const vis: string = (state.visible !== undefined && state.total !== undefined && state.visible < state.total)
         ? ` ${state.visible}/${state.total}`
@@ -256,6 +270,18 @@ struct Index {
   /** Crosshair overlay on the transparent second canvas (cheap: 2 lines + pickbox). */
   drawCrosshair(): void {
     this.ovlCtx.clearRect(0, 0, this.canvasW, this.canvasH);
+    // 选择窗口：引擎 pending_window 起点到光标的虚线框。
+    if (this.windowFrom !== null && this.windowFrom.length === 2 && this.viewHeightW > 0) {
+      const scale: number = this.canvasW / this.viewHeightW;
+      const fx: number = (this.windowFrom[0] - this.viewCenterX) * scale + this.canvasW / 2;
+      const fy: number = this.canvasH / 2 - (this.windowFrom[1] - this.viewCenterY) * scale;
+      this.ovlCtx.setLineDash([6, 4]);
+      this.ovlCtx.strokeStyle = 'rgba(20,163,199,0.8)';
+      this.ovlCtx.lineWidth = 1;
+      this.ovlCtx.strokeRect(Math.min(fx, this.crossX), Math.min(fy, this.crossY),
+        Math.abs(this.crossX - fx), Math.abs(this.crossY - fy));
+      this.ovlCtx.setLineDash([]);
+    }
     if (this.crossX < 0 || this.crossY < 0) {
       return;
     }
@@ -632,8 +658,7 @@ struct Index {
               const p: Record<string, string> = { 'name': l.name };
               this.applyState(Cad.execute('layer.current', p));
               this.dirty = true;
-            })
-          }, (l: CadLayer) => `${l.name}-${l.on}-${l.frozen}-${l.locked}-${this.currentLayer}`)
+            })          }, (l: CadLayer) => `${l.name}-${l.on}-${l.frozen}-${l.locked}-${this.currentLayer}`)
         }
         .width('100%')
       }
@@ -673,6 +698,38 @@ struct Index {
     .layoutWeight(1)
   }
 
+  /** Model/Layout tabs (engine layout.set) + document tabs (session.docs). */
+  @Builder
+  tabsRow() {
+    Row({ space: 2 }) {
+      ForEach(['模型'].concat(this.layouts), (name: string, i: number) => {
+        Button(name)
+          .fontSize(11).height(24).padding({ left: 10, right: 10 })
+          .backgroundColor(this.spaceName === name || (name === '模型' && this.spaceName === '模型') ? PANEL_HI : PANEL)
+          .fontColor(this.spaceName === name ? ACCENT : DIM)
+          .onClick(() => {
+            const p: Record<string, string> = { 'option': 'set', 'name': name };
+            this.applyState(Cad.execute('layout', p));
+            this.dirty = true;
+          })
+      }, (name: string) => `${name}-${this.spaceName}`)
+      Blank()
+      ForEach(this.docs, (d: string, i: number) => {
+        Button(d.length > 0 ? d : `图${i + 1}`)
+          .fontSize(11).height(24).padding({ left: 8, right: 8 })
+          .backgroundColor(this.docIdx === i ? PANEL_HI : PANEL)
+          .fontColor(this.docIdx === i ? ACCENT : DIM)
+          .onClick(() => {
+            this.applyState(Cad.docSwitch(i));
+            this.dirty = true;
+          })
+      }, (d: string, i: number) => `${i}-${d}-${this.docIdx}`)
+    }
+    .width('100%')
+    .height(28)
+    .padding({ left: 6, right: 6 })
+  }
+
   build() {
     Stack() {
       Column() {
@@ -684,6 +741,7 @@ struct Index {
 
           Column() {
             this.menuBar()
+            this.tabsRow()
 
             // Canvas + crosshair overlay: click to pick, middle-drag / two-finger pan (old
             // frame blit), pinch zoom, right-click menu, drag & drop a DXF to open.
@@ -798,6 +856,26 @@ struct Index {
                 .fontSize(11)
                 .fontColor(TEXT)
                 .layoutWeight(1)
+              Button('正交')
+                .fontSize(10).height(22).padding({ left: 6, right: 6 })
+                .backgroundColor(this.ortho ? ACCENT : PANEL)
+                .fontColor(this.ortho ? '#0b1a20' : DIM)
+                .onClick(() => {
+                  const p: Record<string, string | number> = {
+                    'name': 'ORTHOMODE', 'value': this.ortho ? 0 : 1
+                  };
+                  this.applyState(Cad.execute('setvar', p));
+                })
+              Button('捕捉')
+                .fontSize(10).height(22).padding({ left: 6, right: 6 })
+                .backgroundColor(this.osnap ? ACCENT : PANEL)
+                .fontColor(this.osnap ? '#0b1a20' : DIM)
+                .onClick(() => {
+                  const p: Record<string, string | number> = {
+                    'name': 'OSMODE', 'value': this.osnap ? 0 : 4133
+                  };
+                  this.applyState(Cad.execute('setvar', p));
+                })
               Button(this.gridOn ? '栅格 ✓' : '栅格')
                 .fontSize(10).height(22).padding({ left: 6, right: 6 })
                 .backgroundColor(PANEL).fontColor(DIM)

@@ -60,6 +60,13 @@ export interface CadState {
   layers: CadLayer[];
   currentLayer: string;
   selection: CadSel[];
+  space: string;
+  layouts: string[];
+  docs: string[];
+  doc: number;
+  ortho: boolean;
+  osnap: boolean;
+  window: number[] | null;
   result?: object;
   log: string[];
 }
@@ -74,7 +81,9 @@ function parse(json: string): CadState {
   } catch (e) {
     state = {
       ok: false, error: `${e}`, epoch: 0, prompting: false, prompt: null,
-      view: EMPTY_VIEW, canvas: EMPTY_CANVAS, log: [], layers: [], currentLayer: '', selection: []
+      view: EMPTY_VIEW, canvas: EMPTY_CANVAS, log: [], layers: [], currentLayer: '',
+      selection: [], space: '', layouts: [], docs: [], doc: 0,
+      ortho: false, osnap: false, window: null
     };
   }
   if (!state.view) {
@@ -98,6 +107,15 @@ function parse(json: string): CadState {
   if (!state.currentLayer) {
     state.currentLayer = '';
   }
+  if (!state.layouts) {
+    state.layouts = [];
+  }
+  if (!state.docs) {
+    state.docs = [];
+  }
+  if (!state.window) {
+    state.window = null;
+  }
   return state;
 }
 
@@ -119,7 +137,7 @@ export class Cad {
     native.cadResize(w, h);
   }
 
-  static execute(command: string, params: object | null): CadState {
+  static execute(command: string, params: Record<string, string | number | boolean> | null): CadState {
     return parse(native.cadExecute(command, params === null ? '' : JSON.stringify(params)) as string);
   }
 
@@ -166,6 +184,11 @@ export class Cad {
 
   static saveDxf(): string {
     return native.cadSaveDxf() as string;
+  }
+
+  /** Switch the active document tab. */
+  static docSwitch(index: number): CadState {
+    return parse(native.cadDocSwitch(index) as string);
   }
 
   static state(): CadState {

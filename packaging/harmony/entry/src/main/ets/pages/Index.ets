@@ -108,6 +108,8 @@ struct Index {
   private imgH: number = 0;
   private lastBuf: ArrayBuffer = new ArrayBuffer(0);
   private frameBuf: ArrayBuffer = new ArrayBuffer(0);
+  // Fit the view once the real canvas size is known (DXF load happens before onCanvasReady).
+  private needFit: boolean = false;
   private dpr: number = 1;
   private canvasW: number = 0; // vp
   private canvasH: number = 0; // vp
@@ -241,9 +243,14 @@ struct Index {
       return;
     }
     Cad.resize(w, h);
+    if (this.needFit) {
+      this.needFit = false;
+      this.applyState(Cad.zoomExtents());
+      hilog.info(0x0000, 'cadcraft', 'zoomExtents applied at %{public}dx%{public}d', w, h);
+    }
     hilog.info(0x0000, 'cadcraft', 'drawFrame enter %{public}dx%{public}d dirtyWasSet', w, h);
-    this.context.fillStyle = BG;
-    this.context.fillRect(0, 0, this.canvasW, this.canvasH);
+    // No fillRect: it is a *recorded* Canvas command and those accumulate in native.
+    // putImageData below replaces the whole surface, background included.
     // One reusable frame buffer, allocated only when the canvas size changes — zero
     // per-frame allocation (large allocs stall the JS thread on a memory-starved host).
     if (this.frameBuf.byteLength !== w * h * 4) {
@@ -256,7 +263,14 @@ struct Index {
       this.dirty = this.frames < 600;
       return;
     }
-    this.lastBuf = this.frameBuf.slice(0, n);
+    const need: number = w * h * 4;
+    hilog.info(0x0000, 'cadcraft', 'frameInto %{public}d/%{public}d bytes', n, need);
+    // Reuse the print snapshot buffer as well — slice() used to allocate ~2 MB every
+    // single frame, which is precisely the allocation pattern that stalls the JS thread.
+    if (this.lastBuf.byteLength !== n) {
+      this.lastBuf = new ArrayBuffer(n);
+    }
+    new Uint8Array(this.lastBuf).set(new Uint8Array(this.frameBuf, 0, n));
     try {
       // Direct Canvas blit via putImageData (RGBA, Web semantics) — synchronous, and it
       // avoids image.createPixelMap, whose promise stalled on one emulator image.
@@ -266,10 +280,27 @@ struct Index {
         this.imgH = h;
       }
       if (this.imgData !== null) {
-        new Uint8Array(this.imgData.data.buffer).set(new Uint8Array(this.frameBuf, 0, n));
+        const dst: Uint8Array = new Uint8Array(this.imgData.data.buffer);
+        dst.set(new Uint8Array(this.frameBuf, 0, n));
+        // putImageData replaces alpha too. Anything the Rust rasteriser did not fill
+        // must be an opaque BG pixel, otherwise it shows through as a white hole.
+        if (n < need) {
+          for (let i: number = n; i + 3 < need; i += 4) {
+            dst[i] = 0x21;
+            dst[i + 1] = 0x28;
+            dst[i + 2] = 0x30;
+            dst[i + 3] = 0xFF;
+          }
+        }
+        // Grid is stamped into the pixels, NOT recorded as Canvas path commands.
+        // Ace's CanvasPattern appends a malloc'd command on every moveTo/stroke and
+        // never resets them, so per-frame path drawing grew RSS to 2.8 GB and the
+        // main thread blocked inside CanvasPattern::MoveTo -> malloc.
+        if (this.gridOn) {
+          this.stampGridPixels(dst, w, h);
+        }
         this.context.putImageData(this.imgData, 0, 0);
       }
-      this.drawGrid();
       this.panAccX = 0;
       this.panAccY = 0;
       hilog.info(0x0000, 'cadcraft', 'drawFrame done (grid %{public}s)', `${this.gridOn}`);
@@ -279,35 +310,58 @@ struct Index {
     }
   }
 
-  /** Draw the world grid (1-2-5 series, ~10 divisions) over the frame. */
-  drawGrid(): void {
-    if (!this.gridOn || !(this.viewHeightW > 0) || this.canvasW <= 0) {
+  /**
+   * Stamp the 1-2-5 world grid straight into the RGBA frame pixels.
+   * Ace's CanvasPattern allocates a native command on every moveTo/stroke and
+   * never resets the list, so per-frame path drawing grew RSS to 2.8 GB and
+   * blocked the main thread inside CanvasPattern::MoveTo -> malloc (THREAD_BLOCK_6S).
+   * Pure pixel writes keep the frame at exactly one putImageData per repaint.
+   */
+  stampGridPixels(dst: Uint8Array, w: number, h: number): void {
+    if (!(this.viewHeightW > 0) || this.canvasW <= 0) {
       return;
     }
-    const scale: number = this.canvasW / this.viewHeightW; // vp per world unit
+    const scale: number = this.canvasW / this.viewHeightW;
     const raw: number = this.viewHeightW / 10;
     const p: number = Math.pow(10, Math.floor(Math.log10(raw)));
     const r: number = raw / p;
     const step: number = (r < 1.5 ? 1 : r < 3.5 ? 2 : r < 7.5 ? 5 : 10) * p;
+    if (!(step > 0) || step > 1e30) {
+      return;
+    }
     const worldLeft: number = this.viewCenterX - this.canvasW / 2 / scale;
     const worldTop: number = this.viewCenterY + this.canvasH / 2 / scale;
-    this.context.strokeStyle = 'rgba(255,255,255,0.08)';
-    this.context.lineWidth = 1;
     let wx: number = Math.ceil(worldLeft / step) * step;
-    for (; (wx - worldLeft) * scale <= this.canvasW; wx += step) {
-      const sx: number = (wx - worldLeft) * scale;
-      this.context.beginPath();
-      this.context.moveTo(sx, 0);
-      this.context.lineTo(sx, this.canvasH);
-      this.context.stroke();
+    let guard: number = 0;
+    while ((wx - worldLeft) * scale <= this.canvasW && guard < 256) {
+      const sx: number = Math.round((wx - worldLeft) * scale);
+      if (sx >= 0 && sx < w) {
+        for (let y: number = 0; y < h; y++) {
+          const i: number = (y * w + sx) * 4;
+          dst[i] = Math.min(255, dst[i] + 20);
+          dst[i + 1] = Math.min(255, dst[i + 1] + 20);
+          dst[i + 2] = Math.min(255, dst[i + 2] + 20);
+          dst[i + 3] = 255;
+        }
+      }
+      wx += step;
+      guard++;
     }
     let wy: number = Math.ceil((worldTop - this.canvasH / scale) / step) * step;
-    for (; (worldTop - wy) * scale <= this.canvasH; wy += step) {
-      const sy: number = (worldTop - wy) * scale;
-      this.context.beginPath();
-      this.context.moveTo(0, sy);
-      this.context.lineTo(this.canvasW, sy);
-      this.context.stroke();
+    guard = 0;
+    while ((worldTop - wy) * scale <= this.canvasH && guard < 256) {
+      const sy: number = Math.round((worldTop - wy) * scale);
+      if (sy >= 0 && sy < h) {
+        for (let x: number = 0; x < w; x++) {
+          const i: number = (sy * w + x) * 4;
+          dst[i] = Math.min(255, dst[i] + 20);
+          dst[i + 1] = Math.min(255, dst[i + 1] + 20);
+          dst[i + 2] = Math.min(255, dst[i + 2] + 20);
+          dst[i + 3] = 255;
+        }
+      }
+      wy += step;
+      guard++;
     }
   }
 
@@ -319,7 +373,7 @@ struct Index {
     this.context.fillStyle = BG;
     this.context.fillRect(0, 0, this.canvasW, this.canvasH);
     this.context.putImageData(this.imgData, this.panAccX / this.dpr, this.panAccY / this.dpr);
-    this.drawGrid();
+    // Grid is already baked into imgData — no Canvas path commands here either.
   }
 
   /** Crosshair overlay on the transparent second canvas (cheap: 2 lines + pickbox). */
@@ -511,6 +565,7 @@ struct Index {
       fs.closeSync(file);
       const name: string = uri.substring(uri.lastIndexOf('/') + 1);
       this.applyState(Cad.openDxf(name, buf));
+      this.needFit = true;
       this.dirty = true;
       return true;
     } catch (e) {
@@ -549,6 +604,7 @@ struct Index {
         await getContext(this).resourceManager.getRawFileContent('thunder.dxf');
       const buf: ArrayBuffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
       this.applyState(Cad.openDxf('thunder.dxf', buf));
+      this.needFit = true;
       this.dirty = true;
       hilog.info(0x0000, 'cadcraft', 'thunder loaded');
     } catch (e) {

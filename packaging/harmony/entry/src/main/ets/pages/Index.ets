@@ -10,11 +10,17 @@ import picker from '@ohos.file.picker';
 import fs from '@ohos.file.fs';
 import { image } from '@kit.ImageKit';
 import { display } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import displaySync from '@ohos.graphics.displaySync';
+import print from '@ohos.print';
+import { uniformTypeDescriptor } from '@kit.ArkData';
+import unifiedDataChannel from '@ohos.data.unifiedDataChannel';
 import { KeyCode } from '@ohos.multimodalInput.keyCode';
 
 const BG: string = '#212830';
 const PANEL: string = '#2a323c';
 const ACCENT: string = '#14a3c7';
+const ACTIVE_MS: number = 1500; // pointer/key recency that keeps the render loop at 60fps
 
 class MiddleDrag {
   down: boolean = false;
@@ -44,43 +50,67 @@ struct Index {
   private middle: MiddleDrag = new MiddleDrag();
   private ctrlHeld: boolean = false;
   private dirty: boolean = true;
-  private timerId: number = -1;
+  private frames: number = 0;
+  private lastActive: number = 0;
+  private rateHigh: boolean = false;
+  // Accumulated pan offset (device px) since the last full frame — used to blit the old
+  // frame shifted during pans so navigation keeps the display instantly responsive.
+  private panAccX: number = 0;
+  private panAccY: number = 0;
+  // DisplaySync-driven render loop (replaces a setInterval poll): VSync-aligned, with a
+  // frame-rate range the tick switches between interactive (60fps) and idle (5fps).
+  // Created in aboutToAppear — constructing it as a field initializer runs before the UI
+  // context exists and its frame callback never fires.
+  private renderer: displaySync.DisplaySync | null = null;
+  private lastTickAt: number = 0;
+  private fallbackTimer: number = -1;
 
   aboutToAppear(): void {
     this.dpr = display.getDefaultDisplaySync().densityPixels;
     const state: CadState = Cad.init();
     this.applyState(state);
-    // 10 Hz poll: prompt/log/epoch changes plus redraws when dirty. Interaction events
-    // also mark dirty for an immediate refresh at the next tick.
-    this.timerId = setInterval(() => this.tick(), 100);
+    this.renderer = displaySync.create();
+    this.renderer.on('frame', () => this.tick());
+    this.renderer.setExpectedFrameRateRange({ min: 5, max: 120, expected: 60 });
+    // Some emulator images never fire DisplaySync frames: tick liveness check hands the
+    // loop to a 100ms interval whenever DisplaySync stalls (real devices keep 60fps).
+    this.lastTickAt = Date.now();
+    this.fallbackTimer = setInterval(() => {
+      if (Date.now() - this.lastTickAt >= 200) {
+        this.tick();
+      }
+    }, 100);
     this.loadBenchmarkDrawing();
   }
 
-  /** Dev benchmark: load the packed thunder.dxf (rawfile) at startup. Keep small. */
-  private async loadBenchmarkDrawing(): Promise<void> {
-    try {
-      const raw: Uint8Array =
-        await getContext(this).resourceManager.getRawFileContent('thunder.dxf');
-      const buf: ArrayBuffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
-      this.applyState(Cad.openDxf('thunder.dxf', buf));
-      this.dirty = true;
-    } catch (e) {
-      // No thunder.dxf packed in this build — start on the empty drawing.
-    }
-  }
-
   aboutToDisappear(): void {
-    if (this.timerId >= 0) {
-      clearInterval(this.timerId);
+    this.renderer?.off('frame');
+    if (this.fallbackTimer >= 0) {
+      clearInterval(this.fallbackTimer);
     }
   }
 
   tick(): void {
+    this.lastTickAt = Date.now();
+    this.frames += 1;
+    // Frame-rate gear: 60fps while interacting/prompting, 5fps idle (power best practice).
+    const active: boolean =
+      Date.now() - this.lastActive < ACTIVE_MS || this.middle.down || this.prompt.length > 0;
+    if (active !== this.rateHigh) {
+      this.rateHigh = active;
+      this.renderer?.setExpectedFrameRateRange({ min: 5, max: 120, expected: active ? 60 : 5 });
+    }
     if (this.dirty) {
       this.dirty = false;
       this.drawFrame();
     }
-    this.applyState(Cad.state());
+    if (this.frames % 30 === 0) {
+      this.applyState(Cad.state());
+    }
+  }
+
+  markActive(): void {
+    this.lastActive = Date.now();
   }
 
   applyState(state: CadState): void {
@@ -108,6 +138,7 @@ struct Index {
   onCanvasReady(): void {
     this.canvasW = this.context.width;
     this.canvasH = this.context.height;
+    hilog.info(0x0000, 'cadcraft', 'onCanvasReady %{public}dx%{public}d', this.canvasW, this.canvasH);
     Cad.resize(this.canvasW * this.dpr, this.canvasH * this.dpr);
     this.dirty = true;
   }
@@ -116,6 +147,7 @@ struct Index {
     const w: number = Math.round(this.canvasW * this.dpr);
     const h: number = Math.round(this.canvasH * this.dpr);
     if (w < 16 || h < 16) {
+      hilog.warn(0x0000, 'cadcraft', 'drawFrame skip %{public}dx%{public}d', w, h);
       return;
     }
     Cad.resize(w, h);
@@ -143,9 +175,22 @@ struct Index {
         await this.pixelMap.writePixels(area);
       }
       this.context.drawImage(this.pixelMap, 0, 0, this.canvasW, this.canvasH);
+      this.panAccX = 0;
+      this.panAccY = 0;
     } catch (e) {
       this.status = `渲染: ${e}`;
     }
+  }
+
+  /** Instant pan feedback: blit the last full frame shifted by the accumulated pan. */
+  blitPanned(): void {
+    if (this.pixelMap === null || (this.panAccX === 0 && this.panAccY === 0)) {
+      return;
+    }
+    this.context.fillStyle = BG;
+    this.context.fillRect(0, 0, this.canvasW, this.canvasH);
+    this.context.drawImage(this.pixelMap, this.panAccX / this.dpr, this.panAccY / this.dpr,
+      this.canvasW, this.canvasH);
   }
 
   device(xVp: number, yVp: number): number[] {
@@ -155,14 +200,20 @@ struct Index {
   // ---------------- interactions ----------------
 
   handleMouse(event: MouseEvent): void {
+    this.markActive();
     const p: number[] = this.device(event.x, event.y);
     if (event.action === MouseAction.Move) {
       Cad.move(p[0], p[1]);
       if (this.middle.down) {
-        Cad.pan(p[0] - this.middle.lastX, p[1] - this.middle.lastY);
+        const dx: number = p[0] - this.middle.lastX;
+        const dy: number = p[1] - this.middle.lastY;
         this.middle.lastX = p[0];
         this.middle.lastY = p[1];
-        this.dirty = true;
+        this.panAccX += dx;
+        this.panAccY += dy;
+        Cad.pan(dx, dy);
+        this.blitPanned();
+        this.dirty = this.frames % 3 === 0; // full re-render throttled; blit keeps it smooth
       } else {
         this.dirty = true; // cursor previews (rubber band)
       }
@@ -182,23 +233,32 @@ struct Index {
     }
     if (event.action === MouseAction.Release && event.button === MouseButton.Middle) {
       this.middle.down = false;
+      this.dirty = true;
     }
   }
 
   handleTouch(event: TouchEvent): void {
-    // Single tap = click; two-finger drag = pan; pinch zoom is a PinchGesture below.
+    this.markActive();
+    // Single tap = click; two-finger drag = pan (with old-frame blit); pinch zoom is a
+    // PinchGesture below.
     if (event.type === TouchType.Up && event.changedTouches.length >= 1) {
       const t: TouchObject = event.changedTouches[0];
       const p: number[] = this.device(t.x, t.y);
-      this.applyState(Cad.click(p[0], p[1], false, false));
-      this.dirty = true;
+      if (event.touches.length < 2) {
+        this.applyState(Cad.click(p[0], p[1], false, false));
+        this.dirty = true;
+      }
+      this.middle.down = false;
     } else if (event.type === TouchType.Move && event.touches.length === 2) {
       const a: TouchObject = event.touches[0];
       const b: TouchObject = event.touches[1];
       const cx: number[] = this.device((a.x + b.x) / 2, (a.y + b.y) / 2);
       if (this.middle.down) {
+        this.panAccX += cx[0] - this.middle.lastX;
+        this.panAccY += cx[1] - this.middle.lastY;
         Cad.pan(cx[0] - this.middle.lastX, cx[1] - this.middle.lastY);
-        this.dirty = true;
+        this.blitPanned();
+        this.dirty = this.frames % 4 === 0;
       }
       this.middle.down = true;
       this.middle.lastX = cx[0];
@@ -209,6 +269,7 @@ struct Index {
   }
 
   handlePinch(event: GestureEvent): void {
+    this.markActive();
     const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
     this.applyState(Cad.zoom(event.scale / Math.max(0.001, this.lastPinch), p[0], p[1]));
     this.lastPinch = event.scale;
@@ -216,6 +277,7 @@ struct Index {
   }
 
   handleKey(event: KeyEvent): void {
+    this.markActive();
     // Track Ctrl ourselves: ArkTS KeyEvent carries no modifier state in this SDK.
     if (event.keyCode === KeyCode.KEYCODE_CTRL_LEFT || event.keyCode === KeyCode.KEYCODE_CTRL_RIGHT) {
       this.ctrlHeld = event.type === KeyType.Down;
@@ -236,7 +298,6 @@ struct Index {
     } else if (this.ctrlHeld && event.keyCode === KeyCode.KEYCODE_Y) {
       this.keyword('redo');
     } else if (event.keyCode === KeyCode.KEYCODE_PLUS || event.keyCode === KeyCode.KEYCODE_NUMPAD_ADD) {
-      // +/- zoom about the canvas centre (also the uitest-injectable benchmark entry).
       const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
       this.applyState(Cad.zoom(1.25, p[0], p[1]));
       this.dirty = true;
@@ -244,6 +305,100 @@ struct Index {
       const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
       this.applyState(Cad.zoom(0.8, p[0], p[1]));
       this.dirty = true;
+    }
+  }
+
+  // ---------------- files ----------------
+
+  /** Read a granted file uri (file association / drag & drop) into the engine. */
+  openUri(uri: string): boolean {
+    try {
+      const file: fs.File = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      const stat: fs.Stat = fs.statSync(file.fd);
+      const buf: ArrayBuffer = new ArrayBuffer(stat.size);
+      fs.readSync(file.fd, buf);
+      fs.closeSync(file);
+      const name: string = uri.substring(uri.lastIndexOf('/') + 1);
+      this.applyState(Cad.openDxf(name, buf));
+      this.dirty = true;
+      return true;
+    } catch (e) {
+      this.status = `打开: ${e}`;
+      return false;
+    }
+  }
+
+  async openDxf(): Promise<void> {
+    try {
+      const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
+      const opts: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
+      opts.maxSelectNumber = 1;
+      opts.fileSuffixFilters = ['.dxf'];
+      const uris: string[] = await docPicker.select(opts);
+      if (uris.length === 0) {
+        return;
+      }
+      this.openUri(uris[0]);
+    } catch (e) {
+      this.status = `打开: ${e}`;
+    }
+  }
+
+  /** Dev benchmark: load the packed thunder.dxf (rawfile) at startup. Keep small. */
+  private async loadBenchmarkDrawing(): Promise<void> {
+    // 文件关联打开的图优先于基准图；打不开（残留 uri、文件已删）再落回基准图。
+    const uri = AppStorage.get<string>('hocadOpenUri');
+    AppStorage.setOrCreate('hocadOpenUri', '');
+    if (uri && this.openUri(uri)) {
+      return;
+    }
+    try {
+      const raw: Uint8Array =
+        await getContext(this).resourceManager.getRawFileContent('thunder.dxf');
+      const buf: ArrayBuffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+      this.applyState(Cad.openDxf('thunder.dxf', buf));
+      this.dirty = true;
+    } catch (e) {
+      // No thunder.dxf packed in this build — start on the empty drawing.
+    }
+  }
+
+  async saveDxf(): Promise<void> {
+    try {
+      const dxf: string = Cad.saveDxf();
+      const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
+      const opts: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
+      opts.newFileNames = ['drawing.dxf'];
+      const uris: string[] = await docPicker.save(opts);
+      if (uris.length === 0) {
+        return;
+      }
+      const file: fs.File = fs.openSync(uris[0], fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
+      fs.writeSync(file.fd, dxf);
+      fs.closeSync(file);
+      this.log.push(`已保存 ${uris[0]}`);
+    } catch (e) {
+      this.status = `保存: ${e}`;
+    }
+  }
+
+  /** 打印当前视图：pixelMap → PNG in sandbox → 系统打印（Print Kit）。 */
+  async printView(): Promise<void> {
+    if (this.pixelMap === null) {
+      this.status = '打印: 画布尚未渲染';
+      return;
+    }
+    try {
+      const pngPath: string = `${getContext(this).filesDir}/hocad-print.png`;
+      const file: fs.File = fs.openSync(pngPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      const packer: image.ImagePacker = image.createImagePacker();
+      const opts: image.PackingOption = { format: 'image/png', quality: 100 };
+      await packer.packToFile(this.pixelMap, file.fd, opts);
+      fs.closeSync(file);
+      await print.print([pngPath]);
+      this.status = '打印: 已提交系统打印';
+    } catch (e) {
+      this.status = `打印: ${e}`;
     }
   }
 
@@ -268,49 +423,6 @@ struct Index {
   startCommand(name: string): void {
     this.applyState(Cad.start(name));
     this.dirty = true;
-  }
-
-  async openDxf(): Promise<void> {
-    try {
-      const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
-      const opts: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
-      opts.maxSelectNumber = 1;
-      opts.fileSuffixFilters = ['.dxf'];
-      const uris: string[] = await docPicker.select(opts);
-      if (uris.length === 0) {
-        return;
-      }
-      const uri: string = uris[0];
-      const file: fs.File = fs.openSync(uri, fs.OpenMode.READ_ONLY);
-      const stat: fs.Stat = fs.statSync(file.fd);
-      const buf: ArrayBuffer = new ArrayBuffer(stat.size);
-      fs.readSync(file.fd, buf);
-      fs.closeSync(file);
-      const name: string = uri.substring(uri.lastIndexOf('/') + 1);
-      this.applyState(Cad.openDxf(name, buf));
-      this.dirty = true;
-    } catch (e) {
-      this.status = `打开: ${e}`;
-    }
-  }
-
-  async saveDxf(): Promise<void> {
-    try {
-      const dxf: string = Cad.saveDxf();
-      const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
-      const opts: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
-      opts.newFileNames = ['drawing.dxf'];
-      const uris: string[] = await docPicker.save(opts);
-      if (uris.length === 0) {
-        return;
-      }
-      const file: fs.File = fs.openSync(uris[0], fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
-      fs.writeSync(file.fd, dxf);
-      fs.closeSync(file);
-      this.log.push(`已保存 ${uris[0]}`);
-    } catch (e) {
-      this.status = `保存: ${e}`;
-    }
   }
 
   // ---------------- UI ----------------
@@ -346,6 +458,10 @@ struct Index {
         .fontSize(13).height(30).padding({ left: 10, right: 10 })
         .backgroundColor(PANEL).fontColor('#dfe6ee')
         .onClick(() => this.saveDxf())
+      Button('打印')
+        .fontSize(13).height(30).padding({ left: 10, right: 10 })
+        .backgroundColor(PANEL).fontColor('#dfe6ee')
+        .onClick(() => this.printView())
       Button('缩放范围')
         .fontSize(13).height(30).padding({ left: 10, right: 10 })
         .backgroundColor(PANEL).fontColor('#dfe6ee')
@@ -411,7 +527,8 @@ struct Index {
       Column() {
         this.menuBar()
 
-        // Canvas: click to pick, middle-drag / two-finger pan, pinch zoom, right-click menu.
+        // Canvas: click to pick, middle-drag / two-finger pan (old-frame blit), pinch zoom,
+        // right-click menu, drag & drop a DXF to open.
         Stack({ alignContent: Alignment.BottomEnd }) {
           Canvas(this.context)
             .width('100%')
@@ -431,6 +548,17 @@ struct Index {
               this.canvasFocused = false;
             })
             .border({ width: 1, color: this.canvasFocused ? ACCENT : '#00000000' })
+            .allowDrop([uniformTypeDescriptor.UniformDataType.FILE])
+            .onDrop((event: DragEvent) => {
+              const data: unifiedDataChannel.UnifiedData = event.getData();
+              const records: unifiedDataChannel.UnifiedRecord[] = data.getRecords();
+              for (const rec of records) {
+                const file: unifiedDataChannel.File = rec as unifiedDataChannel.File;
+                if (file.uri && file.uri.toLowerCase().endsWith('.dxf')) {
+                  this.openUri(file.uri);
+                }
+              }
+            })
             .bindContextMenu(this.canvasMenu, ResponseType.RightClick)
             .gesture(PinchGesture({ fingers: 2 })
               .onActionUpdate((event: GestureEvent) => this.handlePinch(event)))

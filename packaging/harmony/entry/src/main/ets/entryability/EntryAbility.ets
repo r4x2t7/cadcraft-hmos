@@ -8,7 +8,21 @@ const MIN_WINDOW_HEIGHT_VP: number = 320;
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'cadcraft', 'onCreate');
+    // 文件关联/拖到图标启动：want.uri 是被打开的 DXF。
+    this.handleWant(want);
     // 命令行参数与 --sample 之类启动参数以后走 want.parameters。
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // 应用已在运行时再次双击 .dxf：直接换图。
+    this.handleWant(want);
+  }
+
+  handleWant(want: Want): void {
+    const uri = want.uri;
+    if (uri && uri.toLowerCase().endsWith('.dxf')) {
+      AppStorage.setOrCreate('hocadOpenUri', uri);
+    }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

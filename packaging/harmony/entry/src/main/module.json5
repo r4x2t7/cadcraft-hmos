@@ -19,14 +19,34 @@
         "label": "$string:EntryAbility_label",
         "startWindowIcon": "$media:app_icon",
         "startWindowBackground": "$color:start_window_background",
-        // PC 上多窗口自由缩放；最小窗口由 ArkUI 默认值兜底。
+        // PC 上多窗口自由缩放；最小窗口由 setWindowLimits 兜底。
         "orientation": "unspecified",
         "supportWindowMode": ["fullscreen", "split", "floating"],
         "skills": [
           {
             "entities": ["entity.system.home"],
             "actions": ["action.system.home"]
+          },
+          {
+            // 文件关联：双击 .dxf / 拖到图标 → HoCAD 打开。general.file 宽松声明，
+            // 打开时在 Ability 里校验扩展名。
+            "actions": ["ohos.want.action.viewData"],
+            "uris": [
+              { "scheme": "file", "type": "general.file", "linkFeature": "FileOpen" }
+            ]
           }
+        ]
+      }
+    ],
+    "extensionAbilities": [
+      {
+        // 系统备份/恢复：图纸目录（files/）随系统备份走，换机不丢图。
+        "name": "HoCADBackup",
+        "srcEntry": "./ets/backup/HoCADBackupExtension.ets",
+        "type": "backup",
+        "exported": false,
+        "metadata": [
+          { "name": "ohos.extension.backup", "resource": "$profile:backup_config" }
         ]
       }
     ]

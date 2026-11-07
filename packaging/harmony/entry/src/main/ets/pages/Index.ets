@@ -65,8 +65,10 @@ struct Index {
   private ovlCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.overlaySettings);
   private histScroller: Scroller = new Scroller();
   private pixelMap: image.PixelMap | null = null;
-  private frameWidth: number = 0;
-  private frameHeight: number = 0;
+  private imgData: ImageData | null = null;
+  private imgW: number = 0;
+  private imgH: number = 0;
+  private lastBuf: ArrayBuffer = new ArrayBuffer(0);
   private dpr: number = 1;
   private canvasW: number = 0; // vp
   private canvasH: number = 0; // vp
@@ -184,41 +186,48 @@ struct Index {
   }
 
   async drawFrame(): Promise<void> {
-    const w: number = Math.round(this.canvasW * this.dpr);
-    const h: number = Math.round(this.canvasH * this.dpr);
+    const w: number = Math.round(this.canvasW);
+    const h: number = Math.round(this.canvasH);
     if (w < 16 || h < 16) {
       hilog.warn(0x0000, 'cadcraft', 'drawFrame skip %{public}dx%{public}d', w, h);
       return;
     }
     Cad.resize(w, h);
-    const buf: ArrayBuffer = Cad.frame();
+    hilog.info(0x0000, 'cadcraft', 'resize ok');
+    let buf: ArrayBuffer;
+    hilog.info(0x0000, 'cadcraft', 'drawFrame start %{public}dx%{public}d', w, h);
+    try {
+      buf = Cad.frame();
+    } catch (e) {
+      hilog.error(0x0000, 'cadcraft', 'Cad.frame threw: %{public}s', `${e}`);
+      this.dirty = this.frames < 600;
+      return;
+    }
     if (buf.byteLength === 0) {
+      hilog.warn(0x0000, 'cadcraft', 'Cad.frame empty at %{public}dx%{public}d', w, h);
+      // Retry a bounded number of times: the first frames race the async DXF load.
+      this.dirty = this.frames < 600;
       return;
     }
     try {
-      if (this.pixelMap === null || this.frameWidth !== w || this.frameHeight !== h) {
-        if (this.pixelMap !== null) {
-          await this.pixelMap.release();
-        }
-        const size: image.Size = { width: w, height: h };
-        // The Rust side emits premultiplied BGRA (see apps/cadcraft-ohos/src/render.rs).
-        const opts: image.InitializationOptions = {
-          size: size,
-          srcPixelFormat: image.PixelMapFormat.BGRA_8888
-        };
-        this.pixelMap = await image.createPixelMap(buf, opts);
-        this.frameWidth = w;
-        this.frameHeight = h;
-      } else {
-        const region: image.Region = { size: { width: w, height: h }, x: 0, y: 0 };
-        const area: image.PositionArea = { pixels: buf, offset: 0, stride: w * 4, region: region };
-        await this.pixelMap.writePixels(area);
+      // Direct Canvas blit via putImageData (RGBA, Web semantics) — synchronous, and it
+      // avoids image.createPixelMap, whose promise stalled on one emulator image.
+      if (this.imgData === null || this.imgW !== w || this.imgH !== h) {
+        this.imgData = this.context.createImageData(w, h);
+        this.imgW = w;
+        this.imgH = h;
       }
-      this.context.drawImage(this.pixelMap, 0, 0, this.canvasW, this.canvasH);
+      if (this.imgData !== null) {
+        new Uint8Array(this.imgData.data.buffer).set(new Uint8Array(buf));
+        this.context.putImageData(this.imgData, 0, 0);
+      }
       this.drawGrid();
       this.panAccX = 0;
       this.panAccY = 0;
+      this.lastBuf = buf;
+      hilog.info(0x0000, 'cadcraft', 'drawFrame done (grid %{public}s)', `${this.gridOn}`);
     } catch (e) {
+      hilog.error(0x0000, 'cadcraft', 'drawFrame catch: %{public}s', `${e}`);
       this.status = `渲染: ${e}`;
     }
   }
@@ -257,13 +266,12 @@ struct Index {
 
   /** Instant pan feedback: blit the last full frame shifted by the accumulated pan. */
   blitPanned(): void {
-    if (this.pixelMap === null || (this.panAccX === 0 && this.panAccY === 0)) {
+    if (this.imgData === null || (this.panAccX === 0 && this.panAccY === 0)) {
       return;
     }
     this.context.fillStyle = BG;
     this.context.fillRect(0, 0, this.canvasW, this.canvasH);
-    this.context.drawImage(this.pixelMap, this.panAccX / this.dpr, this.panAccY / this.dpr,
-      this.canvasW, this.canvasH);
+    this.context.putImageData(this.imgData, this.panAccX / this.dpr, this.panAccY / this.dpr);
     this.drawGrid();
   }
 
@@ -332,9 +340,10 @@ struct Index {
         Cad.pan(dx, dy);
         this.blitPanned();
         this.dirty = this.frames % 3 === 0; // full re-render throttled; blit keeps it smooth
-      } else {
-        this.dirty = true; // cursor previews (rubber band)
       }
+      // Hover moves only move the crosshair overlay (drawn above) and the engine cursor:
+      // the emulator re-sends Move every vsync, so a full re-render here would spin at
+      // ~14fps forever (the ANR we hit). Rubber-band previews redraw on real input.
       return;
     }
     if (event.action === MouseAction.Press) {
@@ -500,19 +509,33 @@ struct Index {
     }
   }
 
-  /** 打印当前视图：pixelMap → PNG in sandbox → 系统打印（Print Kit）。 */
+  /** 打印当前视图：lastBuf → PixelMap（打印路径按 BGRA 读，先换 R/B）→ PNG → Print Kit。 */
   async printView(): Promise<void> {
-    if (this.pixelMap === null) {
+    if (this.lastBuf.byteLength === 0) {
       this.status = '打印: 画布尚未渲染';
       return;
     }
     try {
+      const swapped: ArrayBuffer = this.lastBuf.slice(0);
+      const px: Uint8Array = new Uint8Array(swapped);
+      for (let i = 0; i + 3 < px.length; i += 4) {
+        const r = px[i];
+        px[i] = px[i + 2];
+        px[i + 2] = r;
+      }
+      const size: image.Size = { width: this.imgW, height: this.imgH };
+      const opts: image.InitializationOptions = {
+        size: size,
+        srcPixelFormat: image.PixelMapFormat.BGRA_8888
+      };
+      const pm: image.PixelMap = await image.createPixelMap(swapped, opts);
       const pngPath: string = `${getContext(this).filesDir}/hocad-print.png`;
       const file: fs.File = fs.openSync(pngPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
       const packer: image.ImagePacker = image.createImagePacker();
-      const opts: image.PackingOption = { format: 'image/png', quality: 100 };
-      await packer.packToFile(this.pixelMap, file.fd, opts);
+      const po: image.PackingOption = { format: 'image/png', quality: 100 };
+      await packer.packToFile(pm, file.fd, po);
       fs.closeSync(file);
+      await pm.release();
       await print.print([pngPath]);
       this.status = '打印: 已提交系统打印';
     } catch (e) {

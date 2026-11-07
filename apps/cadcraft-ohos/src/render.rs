@@ -11,9 +11,9 @@ use cadcraft_engine::geom::{Bounds2, Vec2};
 
 use crate::app::App;
 
-/// Render the current view. Returns premultiplied BGRA_8888 bytes (the background is
-/// opaque; R/B are swapped for the shell's PixelMap), row-major top-left origin, no
-/// padding.
+/// Render the current view. Returns straight RGBA_8888 bytes (the background is
+/// opaque), row-major top-left origin, no padding — blitted by the shell with Canvas
+/// putImageData.
 pub fn frame(app: &mut App) -> Vec<u8> {
     let started = std::time::Instant::now();
     let Ok(st) = app.session.state() else { return Vec::new() };
@@ -84,13 +84,9 @@ pub fn frame(app: &mut App) -> Vec<u8> {
         &cadcraft_render::raster::RasterOptions::default(),
     ) {
         Some(pm) => {
-            let mut bytes = pm.data().to_vec();
-            // The shell hands the buffer to image.createPixelMap, whose source pixels are
-            // read as BGRA_8888 by default (SDK 26 ignores an explicit RGBA srcPixelFormat),
-            // so swap R/B once here: premultiplied RGBA → premultiplied BGRA.
-            for px in bytes.chunks_exact_mut(4) {
-                px.swap(0, 2);
-            }
+            // The shell blits via Canvas putImageData (Web ImageData semantics: straight
+            // RGBA, background opaque so premultiplied == straight). No swap.
+            let bytes = pm.data().to_vec();
             bytes
         }
         None => Vec::new(),

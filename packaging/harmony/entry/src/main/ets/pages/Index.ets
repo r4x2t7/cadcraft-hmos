@@ -31,6 +31,38 @@ class MiddleDrag {
   lastY: number = 0;
 }
 
+interface ToolDef {
+  id: string;
+  label: string;
+  icon: Resource;
+}
+
+const DRAW_TOOLS: ToolDef[] = [
+  { id: 'line', label: 'LINE', icon: $r('app.media.icon_line') },
+  { id: 'circle', label: 'CIRCLE', icon: $r('app.media.icon_circle') },
+  { id: 'arc', label: 'ARC', icon: $r('app.media.icon_arc') },
+  { id: 'mtext', label: 'MTEXT', icon: $r('app.media.icon_mtext') },
+  { id: 'dimlinear', label: 'DIM', icon: $r('app.media.icon_dimlinear') },
+  { id: 'hatch', label: 'HATCH', icon: $r('app.media.icon_hatch') },
+];
+
+const EDIT_TOOLS: ToolDef[] = [
+  { id: 'erase', label: 'ERASE', icon: $r('app.media.icon_erase') },
+  { id: 'move', label: 'MOVE', icon: $r('app.media.icon_move') },
+  { id: 'copy', label: 'COPY', icon: $r('app.media.icon_copy') },
+  { id: 'offset', label: 'OFFSET', icon: $r('app.media.icon_offset') },
+  { id: 'trim', label: 'TRIM', icon: $r('app.media.icon_trim') },
+];
+
+const TOP_ICONS: ToolDef[] = [
+  { id: 'open', label: '打开', icon: $r('app.media.icon_open') },
+  { id: 'save', label: '保存', icon: $r('app.media.icon_save') },
+  { id: 'print', label: '打印', icon: $r('app.media.icon_print') },
+  { id: 'undo', label: 'UNDO', icon: $r('app.media.icon_undo') },
+  { id: 'redo', label: 'REDO', icon: $r('app.media.icon_redo') },
+  { id: 'zoomextents', label: '缩放范围', icon: $r('app.media.icon_zoomextents') },
+];
+
 @Entry
 @Component
 struct Index {
@@ -657,6 +689,10 @@ struct Index {
         Column({ space: 2 }) {
           ForEach(this.layers, (l: CadLayer) => {
             Row({ space: 4 }) {
+              Text('■')
+                .fontSize(12)
+                .fontColor(l.color.length > 0 ? l.color : '#FFFFFF')
+                .width(14)
               Text(this.currentLayer === l.name ? '▸' : ' ')
                 .fontSize(12).fontColor(ACCENT).width(12)
               Text(l.name)
@@ -681,7 +717,7 @@ struct Index {
               const p: Record<string, string> = { 'name': l.name };
               this.applyState(Cad.execute('layer.current', p));
               this.dirty = true;
-            })          }, (l: CadLayer) => `${l.name}-${l.on}-${l.frozen}-${l.locked}-${this.currentLayer}`)
+            })          }, (l: CadLayer) => `${l.name}-${l.color}-${l.on}-${l.frozen}-${l.locked}-${this.currentLayer}`)
         }
         .width('100%')
       }

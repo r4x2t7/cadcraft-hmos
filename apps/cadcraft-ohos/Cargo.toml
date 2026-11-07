@@ -29,6 +29,7 @@ unimplemented = "deny"
 # carry target_os = "linux", target_env = "ohos" — the gate must be target_env.
 [target.'cfg(target_env = "ohos")'.dependencies]
 cadcraft-engine = { workspace = true }
+cadcraft-color = { workspace = true }
 cadcraft-doc = { workspace = true }
 cadcraft-io = { workspace = true }
 cadcraft-render = { workspace = true }

@@ -23,6 +23,7 @@ export interface CadCanvas {
 
 export interface CadLayer {
   name: string;
+  color: string;
   on: boolean;
   frozen: boolean;
   locked: boolean;

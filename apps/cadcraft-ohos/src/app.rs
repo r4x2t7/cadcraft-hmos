@@ -127,8 +127,18 @@ impl App {
                 d.layers
                     .iter()
                     .map(|l| {
+                        let hex = format!(
+                            "#{:06X}",
+                            l.color
+                                .resolve(
+                                    cadcraft_color::Color::Index(7),
+                                    cadcraft_color::Color::Index(7)
+                                )
+                                .to_u32()
+                        );
                         serde_json::json!({
-                            "name": l.name, "on": l.on, "frozen": l.frozen, "locked": l.locked,
+                            "name": l.name, "color": hex,
+                            "on": l.on, "frozen": l.frozen, "locked": l.locked,
                         })
                     })
                     .collect::<Vec<_>>(),

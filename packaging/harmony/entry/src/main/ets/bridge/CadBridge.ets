@@ -196,8 +196,11 @@ export class Cad {
     return parse(native.cadState() as string);
   }
 
-  /** RGBA_8888 pixels of the current view; empty buffer when the surface is not ready. */
-  static frame(): ArrayBuffer {
-    return native.cadFrame() as ArrayBuffer;
+  /**
+   * Render INTO the caller-owned buffer (filled in place by the engine, zero per-frame
+   * allocation). Returns the byte count written; 0 when nothing is ready yet.
+   */
+  static frameInto(buf: ArrayBuffer): number {
+    return native.cadFrameInto(buf) as number;
   }
 }

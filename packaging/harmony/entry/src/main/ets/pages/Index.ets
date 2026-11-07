@@ -107,6 +107,7 @@ struct Index {
   private imgW: number = 0;
   private imgH: number = 0;
   private lastBuf: ArrayBuffer = new ArrayBuffer(0);
+  private frameBuf: ArrayBuffer = new ArrayBuffer(0);
   private dpr: number = 1;
   private canvasW: number = 0; // vp
   private canvasH: number = 0; // vp
@@ -237,22 +238,19 @@ struct Index {
       return;
     }
     Cad.resize(w, h);
-    hilog.info(0x0000, 'cadcraft', 'resize ok');
-    let buf: ArrayBuffer;
-    hilog.info(0x0000, 'cadcraft', 'drawFrame start %{public}dx%{public}d', w, h);
-    try {
-      buf = Cad.frame();
-    } catch (e) {
-      hilog.error(0x0000, 'cadcraft', 'Cad.frame threw: %{public}s', `${e}`);
-      this.dirty = this.frames < 600;
-      return;
+    // One reusable frame buffer, allocated only when the canvas size changes — zero
+    // per-frame allocation (large allocs stall the JS thread on a memory-starved host).
+    if (this.frameBuf.byteLength !== w * h * 4) {
+      this.frameBuf = new ArrayBuffer(w * h * 4);
     }
-    if (buf.byteLength === 0) {
-      hilog.warn(0x0000, 'cadcraft', 'Cad.frame empty at %{public}dx%{public}d', w, h);
+    const n: number = Cad.frameInto(this.frameBuf);
+    if (n === 0) {
+      hilog.warn(0x0000, 'cadcraft', 'Cad.frameInto empty at %{public}dx%{public}d', w, h);
       // Retry a bounded number of times: the first frames race the async DXF load.
       this.dirty = this.frames < 600;
       return;
     }
+    this.lastBuf = this.frameBuf.slice(0, n);
     try {
       // Direct Canvas blit via putImageData (RGBA, Web semantics) — synchronous, and it
       // avoids image.createPixelMap, whose promise stalled on one emulator image.
@@ -262,13 +260,12 @@ struct Index {
         this.imgH = h;
       }
       if (this.imgData !== null) {
-        new Uint8Array(this.imgData.data.buffer).set(new Uint8Array(buf));
+        new Uint8Array(this.imgData.data.buffer).set(new Uint8Array(this.frameBuf, 0, n));
         this.context.putImageData(this.imgData, 0, 0);
       }
       this.drawGrid();
       this.panAccX = 0;
       this.panAccY = 0;
-      this.lastBuf = buf;
       hilog.info(0x0000, 'cadcraft', 'drawFrame done (grid %{public}s)', `${this.gridOn}`);
     } catch (e) {
       hilog.error(0x0000, 'cadcraft', 'drawFrame catch: %{public}s', `${e}`);

@@ -178,6 +178,17 @@ pub fn js_ok(env: Env, extra: serde_json::Value) -> Value {
     js_string(env, &v.to_string())
 }
 
+/// A 64-bit integer value.
+pub fn js_int64(env: Env, v: i64) -> Value {
+    let mut out: Value = std::ptr::null_mut();
+    unsafe {
+        if napi_create_int64(env, v, &mut out) != 0 {
+            return std::ptr::null_mut();
+        }
+    }
+    out
+}
+
 /// JavaScript `undefined` (for void exports).
 pub fn js_undefined(env: Env) -> Value {
     let mut out: Value = std::ptr::null_mut();

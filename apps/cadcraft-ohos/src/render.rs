@@ -11,18 +11,20 @@ use cadcraft_engine::geom::{Bounds2, Vec2};
 
 use crate::app::App;
 
-/// Render the current view. Returns straight RGBA_8888 bytes (the background is
-/// opaque), row-major top-left origin, no padding — blitted by the shell with Canvas
-/// putImageData.
-pub fn frame(app: &mut App) -> Vec<u8> {
+/// Render the current view INTO a caller-provided buffer (no per-frame allocation: under
+/// host memory pressure, napi_create_arraybuffer and image.createPixelMap stall the JS
+/// thread — one reusable buffer avoids that entirely). Writes straight RGBA_8888 (the
+/// background is opaque), row-major top-left origin, no padding. Returns the byte count
+/// written, or 0 when nothing is ready (view unset, absurd size).
+pub fn frame_into(app: &mut App, out: &mut [u8]) -> usize {
     let started = std::time::Instant::now();
-    let Ok(st) = app.session.state() else { return Vec::new() };
+    let Ok(st) = app.session.state() else { return 0 };
     let view = st.view();
     let (center, height) = (view.center, view.height);
     let (w, h) = (app.width, app.height);
     let scale = f64::from(w) / height.max(1e-9);
     if !(scale.is_finite() && scale > 0.0) {
-        return Vec::new();
+        return 0;
     }
     let raster_view = cadcraft_render::raster::View {
         center,
@@ -30,7 +32,7 @@ pub fn frame(app: &mut App) -> Vec<u8> {
         width: w,
         height: h,
     };
-    let Ok(d) = app.session.doc() else { return Vec::new() };
+    let Ok(d) = app.session.doc() else { return 0 };
     let space = app.session.space();
 
     // ---- display list: viewport culling + build -------------------------------
@@ -89,21 +91,29 @@ pub fn frame(app: &mut App) -> Vec<u8> {
 
     // ---- raster ----------------------------------------------------------------
     let render_started = std::time::Instant::now();
-    let bytes = match cadcraft_render::raster::render(
+    let need = (raster_view.width as usize) * (raster_view.height as usize) * 4;
+    if out.len() < need {
+        app.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
+        return 0;
+    }
+    match cadcraft_render::raster::render(
         &list,
         &raster_view,
         &cadcraft_render::raster::RasterOptions::default(),
     ) {
         Some(pm) => {
-            // The shell blits via Canvas putImageData (Web ImageData semantics: straight
-            // RGBA, background opaque so premultiplied == straight). No swap.
-            let bytes = pm.data().to_vec();
-            bytes
+            // Canvas putImageData takes straight RGBA (Web ImageData semantics); the
+            // background is opaque, so premultiplied == straight. Fill in place.
+            let data = pm.data();
+            out[..data.len()].copy_from_slice(data);
+            app.last_build_ms = build_ms;
+            app.last_raster_ms = render_started.elapsed().as_secs_f64() * 1000.0;
+            app.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
+            data.len()
         }
-        None => Vec::new(),
-    };
-    app.last_build_ms = build_ms;
-    app.last_raster_ms = render_started.elapsed().as_secs_f64() * 1000.0;
-    app.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
-    bytes
+        None => {
+            app.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
+            0
+        }
+    }
 }

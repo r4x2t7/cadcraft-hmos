@@ -104,7 +104,7 @@ unsafe extern "C" fn init(env: ffi::Env, exports: ffi::Value) -> ffi::Value {
         ("cadSaveDxf", Some(cad_save_dxf)),
         ("cadState", Some(cad_state)),
         ("cadDocSwitch", Some(cad_doc_switch)),
-        ("cadFrame", Some(cad_frame)),
+        ("cadFrameInto", Some(cad_frame)),
     ];
     let props: Vec<(std::ffi::CString, ffi::PropertyDescriptor)> =
         pairs.into_iter().map(|(name, cb)| ffi::prop(name, cb)).collect();
@@ -291,11 +291,19 @@ unsafe extern "C" fn cad_doc_switch(env: ffi::Env, info: ffi::CallbackInfo) -> f
 }
 
 unsafe extern "C" fn cad_frame(env: ffi::Env, info: ffi::CallbackInfo) -> ffi::Value {
-    let _ = ffi::args(env, info);
-    let bytes = with_app(render::frame).unwrap_or_default();
-    if bytes.is_empty() {
-        // Surface not sized yet: an empty buffer; the shell skips drawing it.
-        return ffi::js_arraybuffer(env, &bytes);
+    // The shell owns ONE reusable ArrayBuffer and passes it in; we fill it in place.
+    // Zero per-frame allocation — under host memory pressure every large allocation
+    // (napi_create_arraybuffer, image.createPixelMap) stalls the JS thread, which ANR'd.
+    let a = ffi::args(env, info);
+    let buf = a.first().copied().and_then(|v| ffi::arg_bytes(env, v));
+    match buf {
+        Some((len, data)) => {
+            // SAFETY: `data`/`len` describe the ArrayBuffer the loader handed us; writing
+            // stays within its bounds (frame_into fills at most out.len() bytes).
+            let out = unsafe { std::slice::from_raw_parts_mut(data as *mut u8, len) };
+            let written = with_app(|app| render::frame_into(app, out)).unwrap_or(0);
+            ffi::js_int64(env, written as i64)
+        }
+        None => ffi::js_int64(env, 0),
     }
-    ffi::js_arraybuffer(env, &bytes)
 }

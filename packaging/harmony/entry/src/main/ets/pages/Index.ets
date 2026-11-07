@@ -151,8 +151,11 @@ struct Index {
     this.fallbackTimer = setInterval(() => {
       if (Date.now() - this.lastTickAt >= 200) {
         this.tick();
+      } else if (this.frames % 20 === 0) {
+        hilog.info(0x0000, 'cadcraft', 'interval alive, waiting for DisplaySync');
       }
     }, 100);
+    hilog.info(0x0000, 'cadcraft', 'interval registered');
     this.loadBenchmarkDrawing();
   }
 
@@ -238,6 +241,9 @@ struct Index {
       return;
     }
     Cad.resize(w, h);
+    hilog.info(0x0000, 'cadcraft', 'drawFrame enter %{public}dx%{public}d dirtyWasSet', w, h);
+    this.context.fillStyle = BG;
+    this.context.fillRect(0, 0, this.canvasW, this.canvasH);
     // One reusable frame buffer, allocated only when the canvas size changes — zero
     // per-frame allocation (large allocs stall the JS thread on a memory-starved host).
     if (this.frameBuf.byteLength !== w * h * 4) {
@@ -531,6 +537,7 @@ struct Index {
 
   /** Dev benchmark: load the packed thunder.dxf (rawfile) at startup. Keep small. */
   private async loadBenchmarkDrawing(): Promise<void> {
+    hilog.info(0x0000, 'cadcraft', 'loadBenchmarkDrawing enter');
     // 文件关联打开的图优先于基准图；打不开（残留 uri、文件已删）再落回基准图。
     const uri = AppStorage.get<string>('hocadOpenUri');
     AppStorage.setOrCreate('hocadOpenUri', '');
@@ -543,6 +550,7 @@ struct Index {
       const buf: ArrayBuffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
       this.applyState(Cad.openDxf('thunder.dxf', buf));
       this.dirty = true;
+      hilog.info(0x0000, 'cadcraft', 'thunder loaded');
     } catch (e) {
       // No thunder.dxf packed in this build — start on the empty drawing.
     }
@@ -876,7 +884,9 @@ struct Index {
               Canvas(this.context)
                 .width('100%')
                 .height('100%')
-                .backgroundColor(BG)
+                // NOTE: no backgroundColor — ArkUI composites it OVER the recorded canvas
+                // instructions on this image, hiding every putImageData frame. drawFrame
+                // fills the background itself.
                 .onReady(() => this.onCanvasReady())
                 .onMouse((event: MouseEvent) => this.handleMouse(event))
                 .onTouch((event: TouchEvent) => this.handleTouch(event))

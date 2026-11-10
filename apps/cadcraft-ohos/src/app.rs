@@ -151,11 +151,13 @@ impl App {
             handles
                 .iter()
                 .filter_map(|h| d.model.get(*h))
-                .take(30)
+                .take(200)
                 .map(|e| {
                     serde_json::json!({
+                        "handle": e.handle.0,
                         "kind": format!("{:?}", e.kind),
                         "layer": e.common.layer,
+                        "color": format!("{:?}", e.common.color),
                     })
                 })
                 .collect()

@@ -30,8 +30,10 @@ export interface CadLayer {
 }
 
 export interface CadSel {
+  handle: number;
   kind: string;
   layer: string;
+  color: string;
 }
 
 export interface CadMenuItem {
@@ -138,7 +140,7 @@ export class Cad {
     native.cadResize(w, h);
   }
 
-  static execute(command: string, params: Record<string, string | number | boolean> | null): CadState {
+  static execute(command: string, params: Record<string, string | number | boolean | number[]> | null): CadState {
     return parse(native.cadExecute(command, params === null ? '' : JSON.stringify(params)) as string);
   }
 

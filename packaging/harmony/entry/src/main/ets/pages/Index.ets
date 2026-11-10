@@ -887,26 +887,67 @@ struct Index {
     .layoutWeight(1)
   }
 
-  /** 右侧特性面板：选中实体的类型与图层（只读 v1）。 */
+  /** 选中集的句柄数组（properties.set 的 handles 参数）。 */
+  private selHandles(): number[] {
+    return this.selection.map((s: CadSel) => s.handle);
+  }
+
+  /** 属性编辑：把字段应用到整个选中集（引擎 properties.set）。 */
+  applyProps(field: string, value: string | number): void {
+    const handles = this.selHandles();
+    if (handles.length === 0) {
+      return;
+    }
+    const p: Record<string, string | number | number[]> = { 'handles': handles };
+    p[field] = value;
+    this.applyState(Cad.execute('properties.set', p));
+    this.dirty = true;
+  }
+
+  /** 右侧特性面板：选中集概览 + 图层/颜色编辑。 */
   @Builder
   propertiesPanel() {
     Column({ space: 2 }) {
-      Text('特性').fontSize(12).fontColor(ACCENT)
+      Text(`特性 (${this.selection.length})`).fontSize(12).fontColor(ACCENT)
       if (this.selection.length === 0) {
         Text('未选择对象').fontSize(10).fontColor(DIM)
       } else {
         Scroll() {
-          Column({ space: 2 }) {
+          Column({ space: 3 }) {
+            Text('图层 →').fontSize(9).fontColor(DIM)
+            ForEach(this.layers, (l: CadLayer) => {
+              Text(l.name)
+                .fontSize(10)
+                .fontColor(TEXT)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .width('100%')
+                .padding({ left: 5, top: 3, bottom: 3 })
+                .borderRadius(3)
+                .backgroundColor(l.name === this.selection[0].layer ? PANEL_HI : PANEL)
+                .onClick(() => this.applyProps('layer', l.name))
+            }, (l: CadLayer) => `${l.name}-${this.selection[0].layer}`)
+            Text('颜色 →').fontSize(9).fontColor(DIM)
+            Row({ space: 3 }) {
+              ForEach([1, 2, 3, 4, 5, 6, 7], (aci: number) => {
+                Text('■')
+                  .fontSize(13)
+                  .fontColor(['#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#0000FF', '#FF00FF', '#FFFFFF'][aci - 1])
+                  .onClick(() => this.applyProps('color', aci))
+              }, (aci: number) => `${aci}`)
+            }
+            Text('对象列表 →').fontSize(9).fontColor(DIM)
             ForEach(this.selection, (s: CadSel, i: number) => {
               Column({ space: 0 }) {
-                Text(s.kind).fontSize(10).fontColor(TEXT).maxLines(1)
+                Text(`${s.kind} #${s.handle.toString(16).toUpperCase()}`)
+                  .fontSize(10).fontColor(TEXT).maxLines(1)
                 Text(s.layer).fontSize(9).fontColor(DIM).maxLines(1)
               }
               .width('100%')
               .padding(3)
               .borderRadius(3)
               .backgroundColor(PANEL)
-            }, (s: CadSel, i: number) => `${i}-${s.kind}-${s.layer}`)
+            }, (s: CadSel, i: number) => `${i}-${s.handle}-${s.kind}-${s.layer}`)
           }
           .width('100%')
         }

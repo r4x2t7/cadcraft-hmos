@@ -108,6 +108,14 @@ struct Index {
   @State ctxLayer: string = '';
   @State ctxOpen: boolean = false;
   @State geomValue: string = '';
+  @State hatchOpen: boolean = false;
+  @State hatchPattern: string = 'ANSI31';
+  @State hatchScale: string = '1';
+  @State hatchAngle: string = '0';
+  @State mtextOpen: boolean = false;
+  @State mtextText: string = '';
+  @State mtextHeight: string = '2.5';
+  @State pendingPlace: string = ''; // '' | 'hatch' | 'mtext'
   @State pmVersion: number = 0; // bumps when a new pixelMap is installed (Image refresh)
   private allIds: string[] = [];
   private overlaySettings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -445,6 +453,30 @@ struct Index {
         this.middle.lastX = p[0];
         this.middle.lastY = p[1];
       } else if (event.button === MouseButton.Left) {
+        if (this.pendingPlace !== '') {
+          // 对话框确认后：这次点击是放置点（世界坐标）。
+          const scale: number = this.canvasW / this.viewHeightW;
+          const wx: number = this.viewCenterX + (event.x - this.canvasW / 2) / scale;
+          const wy: number = this.viewCenterY - (event.y - this.canvasH / 2) / scale;
+          if (this.pendingPlace === 'hatch') {
+            const hs = Number(this.hatchScale) || 1;
+            const an = Number(this.hatchAngle) || 0;
+            const p: Record<string, string | number | number[][]> = {
+              'points': [[wx, wy]], 'pattern': this.hatchPattern,
+              'scale': hs, 'angle': an
+            };
+            this.applyState(Cad.execute('hatch', p));
+          } else if (this.pendingPlace === 'mtext') {
+            const hh = Number(this.mtextHeight) || 2.5;
+            const p: Record<string, string | number | number[]> = {
+              'at': [wx, wy], 'text': this.mtextText, 'height': hh
+            };
+            this.applyState(Cad.execute('mtext', p));
+          }
+          this.pendingPlace = '';
+          this.dirty = true;
+          return;
+        }
         // 夹点流：空闲点击命中夹点 → 交互 GRIP（橡皮筋跟手，点击确认，Space 翻模式）。
         if (this.hotGrip === null) {
           const g = this.gripAt(event.x, event.y);
@@ -825,7 +857,15 @@ struct Index {
     .width('100%')
     .padding({ top: 4, bottom: 4 })
     .borderRadius(4)
-    .onClick(() => this.startCommand(t.id))
+    .onClick(() => {
+      if (t.id === 'hatch') {
+        this.hatchOpen = true;
+      } else if (t.id === 'mtext') {
+        this.mtextOpen = true;
+      } else {
+        this.startCommand(t.id);
+      }
+    })
   }
 
   @Builder
@@ -1400,6 +1440,113 @@ struct Index {
           .borderRadius(8)
           .backgroundColor(PANEL_HI)
           .position({ x: 180, y: 200 })
+        }
+
+        // HATCH 对话框：图案/比例/角度 → 确认后点画布放内部点。
+        if (this.hatchOpen) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('rgba(0,0,0,0.4)')
+            .onClick(() => {
+              this.hatchOpen = false;
+            })
+        }
+        if (this.hatchOpen) {
+          Column({ space: 8 }) {
+            Text('填充 (HATCH)').fontSize(14).fontColor(TEXT)
+            Text('图案').fontSize(10).fontColor(DIM)
+            Scroll() {
+              Row({ space: 4 }) {
+                ForEach(['SOLID', 'ANSI31', 'ANSI32', 'ANSI33', 'ANSI34', 'ANSI35', 'ANSI36', 'ANSI37', 'ANSI38'],
+                  (name: string) => {
+                    Text(name)
+                      .fontSize(10)
+                      .fontColor(this.hatchPattern === name ? ACCENT : TEXT)
+                      .padding({ left: 6, right: 6, top: 4, bottom: 4 })
+                      .borderRadius(3)
+                      .border({ width: 1, color: this.hatchPattern === name ? ACCENT : '#3a4450' })
+                      .onClick(() => {
+                        this.hatchPattern = name;
+                      })
+                  }, (name: string) => name)
+              }
+            }
+            .scrollable(ScrollDirection.Horizontal)
+            .width('100%')
+            Row({ space: 8 }) {
+              Column({ space: 2 }) {
+                Text('比例').fontSize(10).fontColor(DIM)
+                TextInput({ text: this.hatchScale })
+                  .width(80).height(30).fontSize(12)
+                  .onChange((v: string) => {
+                    this.hatchScale = v;
+                  })
+              }
+              Column({ space: 2 }) {
+                Text('角度').fontSize(10).fontColor(DIM)
+                TextInput({ text: this.hatchAngle })
+                  .width(80).height(30).fontSize(12)
+                  .onChange((v: string) => {
+                    this.hatchAngle = v;
+                  })
+              }
+            }
+            .width('100%')
+            Button('确定 → 点画布放置')
+              .fontSize(12).height(32)
+              .backgroundColor(ACCENT).fontColor('#0b1a20')
+              .onClick(() => {
+                this.hatchOpen = false;
+                this.pendingPlace = 'hatch';
+              })
+          }
+          .padding(14)
+          .borderRadius(8)
+          .backgroundColor(PANEL_HI)
+          .position({ x: this.canvasW / 2 - 150, y: 120 })
+        }
+
+        // MTEXT 对话框：内容/字高 → 确认后点画布放插入点。
+        if (this.mtextOpen) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('rgba(0,0,0,0.4)')
+            .onClick(() => {
+              this.mtextOpen = false;
+            })
+        }
+        if (this.mtextOpen) {
+          Column({ space: 8 }) {
+            Text('多行文字 (MTEXT)').fontSize(14).fontColor(TEXT)
+            TextInput({ text: this.mtextText })
+              .width('100%')
+              .height(34)
+              .fontSize(12)
+              .onChange((v: string) => {
+                this.mtextText = v;
+              })
+            Column({ space: 2 }) {
+              Text('字高').fontSize(10).fontColor(DIM)
+              TextInput({ text: this.mtextHeight })
+                .width(80).height(30).fontSize(12)
+                .onChange((v: string) => {
+                  this.mtextHeight = v;
+                })
+            }
+            Button('确定 → 点画布放置')
+              .fontSize(12).height(32)
+              .backgroundColor(ACCENT).fontColor('#0b1a20')
+              .onClick(() => {
+                this.mtextOpen = false;
+                this.pendingPlace = 'mtext';
+              })
+          }
+          .padding(14)
+          .borderRadius(8)
+          .backgroundColor(PANEL_HI)
+          .position({ x: this.canvasW / 2 - 150, y: 120 })
         }
       }
       .width('100%')

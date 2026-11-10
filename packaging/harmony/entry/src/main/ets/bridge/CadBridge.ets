@@ -151,7 +151,7 @@ export class Cad {
     native.cadResize(w, h);
   }
 
-  static execute(command: string, params: Record<string, string | number | boolean | number[]> | null): CadState {
+  static execute(command: string, params: Record<string, string | number | boolean | number[] | number[][]> | null): CadState {
     return parse(native.cadExecute(command, params === null ? '' : JSON.stringify(params)) as string);
   }
 

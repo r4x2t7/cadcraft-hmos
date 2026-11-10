@@ -107,6 +107,7 @@ struct Index {
   @State newLayerName: string = '';
   @State ctxLayer: string = '';
   @State ctxOpen: boolean = false;
+  @State geomValue: string = '';
   @State pmVersion: number = 0; // bumps when a new pixelMap is installed (Image refresh)
   private allIds: string[] = [];
   private overlaySettings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -735,7 +736,14 @@ struct Index {
       MenuItem({ content: '重做 (Ctrl+Y)' }).onClick(() => this.keyword('redo'))
       MenuItem({ content: '画直线 (LINE)' }).onClick(() => this.startCommand('line'))
       MenuItem({ content: '画圆 (CIRCLE)' }).onClick(() => this.startCommand('circle'))
-      MenuItem({ content: '删除 (ERASE)' }).onClick(() => this.startCommand('erase'))
+      MenuItem({ content: this.selection.length > 0 ? '删除选中 (ERASE)' : '删除 (ERASE)' }).onClick(() => {
+        if (this.selection.length > 0) {
+          this.applyState(Cad.execute('erase', {}));
+        } else {
+          this.startCommand('erase');
+        }
+        this.dirty = true;
+      })
     }
   }
 
@@ -970,6 +978,28 @@ struct Index {
                   .onClick(() => this.applyProps('color', aci))
               }, (aci: number) => `${aci}`)
             }
+            if (this.selection.length === 1 && this.selection[0].kind.startsWith('Circle')) {
+              Column({ space: 2 }) {
+                Text('半径 →').fontSize(9).fontColor(DIM)
+                Row({ space: 4 }) {
+                  TextInput({ text: this.geomValue })
+                    .width(70).height(24).fontSize(10)
+                    .onChange((v: string) => {
+                      this.geomValue = v;
+                    })
+                  Button('应用')
+                    .fontSize(9).height(24)
+                    .backgroundColor(PANEL).fontColor(TEXT)
+                    .onClick(() => {
+                      const r = Number(this.geomValue);
+                      if (r > 0) {
+                        this.applyProps('radius', r);
+                      }
+                    })
+                }
+              }
+              .width('100%')
+            }
             Text('对象列表 →').fontSize(9).fontColor(DIM)
             ForEach(this.selection, (s: CadSel, i: number) => {
               Column({ space: 0 }) {
@@ -1009,14 +1039,27 @@ struct Index {
       }, (name: string) => `${name}-${this.spaceName}`)
       Blank()
       ForEach(this.docs, (d: string, i: number) => {
-        Button(d.length > 0 ? d : `图${i + 1}`)
-          .fontSize(11).height(24).padding({ left: 8, right: 8 })
-          .backgroundColor(this.docIdx === i ? PANEL_HI : PANEL)
-          .fontColor(this.docIdx === i ? ACCENT : DIM)
-          .onClick(() => {
-            this.applyState(Cad.docSwitch(i));
-            this.dirty = true;
-          })
+        Row({ space: 1 }) {
+          Button(d.length > 0 ? d : `图${i + 1}`)
+            .fontSize(11).height(24).padding({ left: 8, right: 4 })
+            .backgroundColor(this.docIdx === i ? PANEL_HI : PANEL)
+            .fontColor(this.docIdx === i ? ACCENT : DIM)
+            .onClick(() => {
+              this.applyState(Cad.docSwitch(i));
+              this.dirty = true;
+            })
+          if (this.docs.length > 1) {
+            Text('×')
+              .fontSize(11).fontColor(DIM)
+              .padding({ left: 2, right: 5, top: 4, bottom: 4 })
+              .onClick(() => {
+                const p: Record<string, number> = { 'index': i };
+                this.applyState(Cad.execute('close', p));
+                this.dirty = true;
+              })
+          }
+        }
+        .backgroundColor(this.docIdx === i ? PANEL_HI : PANEL)
       }, (d: string, i: number) => `${i}-${d}-${this.docIdx}`)
     }
     .width('100%')
@@ -1140,6 +1183,10 @@ struct Index {
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                       .width('100%')
+                      .onClick(() => {
+                        this.cmdText = line;
+                        this.suggestions = [];
+                      })
                   }, (line: string, i: number) => `${i}-${line}`)
                 }
                 .width('100%')

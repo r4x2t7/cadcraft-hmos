@@ -1152,6 +1152,15 @@ struct Index {
             .padding({ left: 8, right: 8 })
           }
           .layoutWeight(1)
+
+          // 右侧面板：图层 CRUD + 特性（只读 v1）。
+          Column({ space: 4 }) {
+            this.layersPanel()
+            this.propertiesPanel()
+          }
+          .width(130)
+          .padding(4)
+          .backgroundColor(BG)
         }
         .layoutWeight(1)
 

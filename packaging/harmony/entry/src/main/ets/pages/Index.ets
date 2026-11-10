@@ -1,9 +1,18 @@
 // HoCAD HarmonyOS shell (2in1 / PC + tablet): thin ArkUI front end over the Rust engine.
 // Panels read engine state (cadState) and act through Cad* calls — the same discipline as
 // the egui UI crate ("the UI is thin"). Canvas frames come from the CPU rasteriser, like
-// the web and plot paths.
+// the web and plot paths, displayed through an Image(pixelMap) component.
 //
 // All pointer coordinates handed to Cad are DEVICE pixels (vp × densityPixels).
+//
+// Display notes (empirical, this emulator image):
+// - image.createPixelMap's promise can stall under host memory pressure → one pixelMap is
+//   created per canvas size and refreshed with writePixels (no repeated large allocs).
+// - Canvas putImageData maps ImageData rows at 1/dpr vertically on this image (colour-band
+//   probe) → do not blit through Canvas. Image+objectFit(Fill) is 1:1 device pixels.
+// - Recording Canvas path commands leaks native memory (AceCanvas never resets them) → the
+//   grid is stamped into the frame pixels and the overlay canvas redraws only on rare
+//   events, never per frame.
 
 import { Cad, CadState, CadView, CadLayer, CadSel, CadMenu, CadMenuItem } from '../bridge/CadBridge';
 import picker from '@ohos.file.picker';
@@ -79,11 +88,11 @@ struct Index {
   @State currentLayer: string = '';
   @State selection: CadSel[] = [];
   @State coordsText: string = '';
+  private crossX: number = -100;
+  private crossY: number = -100;
   @State gridOn: boolean = true;
   @State openMenu: number = -1;
   @State menuX: number = 0;
-  @State crossX: number = -100;
-  @State crossY: number = -100;
   @State spaceName: string = '模型';
   @State layouts: string[] = [];
   @State docs: string[] = [];
@@ -96,19 +105,15 @@ struct Index {
   @State newLayerName: string = '';
   @State ctxLayer: string = '';
   @State ctxOpen: boolean = false;
+  @State pmVersion: number = 0; // bumps when a new pixelMap is installed (Image refresh)
   private allIds: string[] = [];
-  private settings: RenderingContextSettings = new RenderingContextSettings(false);
-  private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
   private overlaySettings: RenderingContextSettings = new RenderingContextSettings(true);
   private ovlCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.overlaySettings);
   private histScroller: Scroller = new Scroller();
-  private pixelMap: image.PixelMap | null = null;
-  private imgData: ImageData | null = null;
-  private imgW: number = 0;
-  private imgH: number = 0;
+  @State pixelMap: image.PixelMap | null = null;
   private lastBuf: ArrayBuffer = new ArrayBuffer(0);
   private frameBuf: ArrayBuffer = new ArrayBuffer(0);
-  // Fit the view once the real canvas size is known (DXF load happens before onCanvasReady).
+  // Fit the view once the real canvas size is known (DXF load happens before layout).
   private needFit: boolean = false;
   private dpr: number = 1;
   private canvasW: number = 0; // vp
@@ -121,14 +126,12 @@ struct Index {
   private rateHigh: boolean = false;
   private panAccX: number = 0;
   private panAccY: number = 0;
-  // World view of the last cadState (for grid + coordinate readout math).
+  // World view of the last cadState (for the coordinate readout).
   private viewCenterX: number = 0;
   private viewCenterY: number = 0;
   private viewHeightW: number = 0;
-  // DisplaySync-driven render loop (replaces a setInterval poll): VSync-aligned, with a
-  // frame-rate range the tick switches between interactive (60fps) and idle (5fps).
-  // Created in aboutToAppear — constructing it as a field initializer runs before the UI
-  // context exists and its frame callback never fires.
+  // DisplaySync-driven render loop: VSync-aligned when the image fires frames, with a
+  // liveness-checked 100ms interval fallback (some emulator images never fire frames).
   private renderer: displaySync.DisplaySync | null = null;
   private lastTickAt: number = 0;
   private fallbackTimer: number = -1;
@@ -147,17 +150,12 @@ struct Index {
     this.renderer = displaySync.create();
     this.renderer.on('frame', () => this.tick());
     this.renderer.setExpectedFrameRateRange({ min: 5, max: 120, expected: 60 });
-    // Some emulator images never fire DisplaySync frames: tick liveness check hands the
-    // loop to a 100ms interval whenever DisplaySync stalls (real devices keep 60fps).
     this.lastTickAt = Date.now();
     this.fallbackTimer = setInterval(() => {
       if (Date.now() - this.lastTickAt >= 200) {
         this.tick();
-      } else if (this.frames % 20 === 0) {
-        hilog.info(0x0000, 'cadcraft', 'interval alive, waiting for DisplaySync');
       }
     }, 100);
-    hilog.info(0x0000, 'cadcraft', 'interval registered');
     this.loadBenchmarkDrawing();
   }
 
@@ -171,7 +169,6 @@ struct Index {
   tick(): void {
     this.lastTickAt = Date.now();
     this.frames += 1;
-    // Frame-rate gear: 60fps while interacting/prompting, 5fps idle (power best practice).
     const active: boolean =
       Date.now() - this.lastActive < ACTIVE_MS || this.middle.down || this.prompt.length > 0;
     if (active !== this.rateHigh) {
@@ -221,89 +218,78 @@ struct Index {
     this.viewCenterX = view.center[0];
     this.viewCenterY = view.center[1];
     this.viewHeightW = view.height;
-    this.status =
-      `视图高 ${view.height.toFixed(2)} | ${this.frameMs}`;
+    this.status = `视图高 ${view.height.toFixed(2)} | ${this.frameMs}`;
+    this.drawCrosshair();
   }
 
   // ---------------- canvas ----------------
 
-  onCanvasReady(): void {
-    this.canvasW = this.context.width;
-    this.canvasH = this.context.height;
-    hilog.info(0x0000, 'cadcraft', 'onCanvasReady %{public}dx%{public}d', this.canvasW, this.canvasH);
-    Cad.resize(this.canvasW * this.dpr, this.canvasH * this.dpr);
+  /** Called from the overlay canvas area change / ready with the real vp size. */
+  onCanvasSize(wVp: number, hVp: number): void {
+    if (Math.round(wVp) === Math.round(this.canvasW) && Math.round(hVp) === Math.round(this.canvasH)) {
+      return;
+    }
+    this.canvasW = wVp;
+    this.canvasH = hVp;
+    hilog.info(0x0000, 'cadcraft', 'canvas size %{public}dx%{public}d vp', Math.round(wVp), Math.round(hVp));
+    Cad.resize(Math.round(wVp * this.dpr), Math.round(hVp * this.dpr));
+    if (this.needFit) {
+      this.needFit = false;
+      this.applyState(Cad.zoomExtents());
+    }
     this.dirty = true;
+    this.drawCrosshair();
   }
 
   async drawFrame(): Promise<void> {
-    const w: number = Math.round(this.canvasW);
-    const h: number = Math.round(this.canvasH);
+    const w: number = Math.round(this.canvasW * this.dpr);
+    const h: number = Math.round(this.canvasH * this.dpr);
     if (w < 16 || h < 16) {
       hilog.warn(0x0000, 'cadcraft', 'drawFrame skip %{public}dx%{public}d', w, h);
       return;
     }
     Cad.resize(w, h);
-    if (this.needFit) {
-      this.needFit = false;
-      this.applyState(Cad.zoomExtents());
-      hilog.info(0x0000, 'cadcraft', 'zoomExtents applied at %{public}dx%{public}d', w, h);
-    }
-    hilog.info(0x0000, 'cadcraft', 'drawFrame enter %{public}dx%{public}d dirtyWasSet', w, h);
-    // No fillRect: it is a *recorded* Canvas command and those accumulate in native.
-    // putImageData below replaces the whole surface, background included.
-    // One reusable frame buffer, allocated only when the canvas size changes — zero
-    // per-frame allocation (large allocs stall the JS thread on a memory-starved host).
+    // One reusable frame buffer per canvas size — zero per-frame allocation (large allocs
+    // stall the JS thread on a memory-starved host).
     if (this.frameBuf.byteLength !== w * h * 4) {
       this.frameBuf = new ArrayBuffer(w * h * 4);
     }
     const n: number = Cad.frameInto(this.frameBuf);
     if (n === 0) {
       hilog.warn(0x0000, 'cadcraft', 'Cad.frameInto empty at %{public}dx%{public}d', w, h);
-      // Retry a bounded number of times: the first frames race the async DXF load.
-      this.dirty = this.frames < 600;
+      this.dirty = this.frames < 600; // retry: first frames race the async DXF load
       return;
     }
-    const need: number = w * h * 4;
-    hilog.info(0x0000, 'cadcraft', 'frameInto %{public}d/%{public}d bytes', n, need);
-    // Reuse the print snapshot buffer as well — slice() used to allocate ~2 MB every
-    // single frame, which is precisely the allocation pattern that stalls the JS thread.
-    if (this.lastBuf.byteLength !== n) {
-      this.lastBuf = new ArrayBuffer(n);
+    const px: Uint8Array = new Uint8Array(this.frameBuf, 0, n);
+    if (this.gridOn) {
+      this.stampGridPixels(px, w, h);
     }
-    new Uint8Array(this.lastBuf).set(new Uint8Array(this.frameBuf, 0, n));
     try {
-      // Direct Canvas blit via putImageData (RGBA, Web semantics) — synchronous, and it
-      // avoids image.createPixelMap, whose promise stalled on one emulator image.
-      if (this.imgData === null || this.imgW !== w || this.imgH !== h) {
-        this.imgData = this.context.createImageData(w, h);
-        this.imgW = w;
-        this.imgH = h;
+      // Display via an Image(pixelMap) component. createPixelMap reads the source buffer
+      // as BGRA on this image (explicit srcPixelFormat is ignored), while the engine
+      // emits RGBA — swap R/B in place once, then hand over.
+      for (let i = 0; i + 3 < n; i += 4) {
+        const r = px[i];
+        px[i] = px[i + 2];
+        px[i + 2] = r;
       }
-      if (this.imgData !== null) {
-        const dst: Uint8Array = new Uint8Array(this.imgData.data.buffer);
-        dst.set(new Uint8Array(this.frameBuf, 0, n));
-        // putImageData replaces alpha too. Anything the Rust rasteriser did not fill
-        // must be an opaque BG pixel, otherwise it shows through as a white hole.
-        if (n < need) {
-          for (let i: number = n; i + 3 < need; i += 4) {
-            dst[i] = 0x21;
-            dst[i + 1] = 0x28;
-            dst[i + 2] = 0x30;
-            dst[i + 3] = 0xFF;
-          }
+      if (this.pixelMap === null || this.pixelMap.getImageInfoSync().size.width !== w
+        || this.pixelMap.getImageInfoSync().size.height !== h) {
+        if (this.pixelMap !== null) {
+          await this.pixelMap.release();
         }
-        // Grid is stamped into the pixels, NOT recorded as Canvas path commands.
-        // Ace's CanvasPattern appends a malloc'd command on every moveTo/stroke and
-        // never resets them, so per-frame path drawing grew RSS to 2.8 GB and the
-        // main thread blocked inside CanvasPattern::MoveTo -> malloc.
-        if (this.gridOn) {
-          this.stampGridPixels(dst, w, h);
-        }
-        this.context.putImageData(this.imgData, 0, 0);
+        const size: image.Size = { width: w, height: h };
+        const opts: image.InitializationOptions = {
+          size: size,
+          srcPixelFormat: image.PixelMapFormat.BGRA_8888
+        };
+        this.pixelMap = await image.createPixelMap(this.frameBuf.slice(0, n), opts);
+        this.pmVersion += 1;
+      } else {
+        const region: image.Region = { size: { width: w, height: h }, x: 0, y: 0 };
+        const area: image.PositionArea = { pixels: this.frameBuf.slice(0, n), offset: 0, stride: w * 4, region: region };
+        await this.pixelMap.writePixels(area);
       }
-      this.panAccX = 0;
-      this.panAccY = 0;
-      hilog.info(0x0000, 'cadcraft', 'drawFrame done (grid %{public}s)', `${this.gridOn}`);
     } catch (e) {
       hilog.error(0x0000, 'cadcraft', 'drawFrame catch: %{public}s', `${e}`);
       this.status = `渲染: ${e}`;
@@ -311,17 +297,16 @@ struct Index {
   }
 
   /**
-   * Stamp the 1-2-5 world grid straight into the RGBA frame pixels.
-   * Ace's CanvasPattern allocates a native command on every moveTo/stroke and
-   * never resets the list, so per-frame path drawing grew RSS to 2.8 GB and
-   * blocked the main thread inside CanvasPattern::MoveTo -> malloc (THREAD_BLOCK_6S).
-   * Pure pixel writes keep the frame at exactly one putImageData per repaint.
+   * Stamp the 1-2-5 world grid straight into the RGBA frame pixels. Recording Canvas path
+   * commands leaks native memory on this image (AceCanvas never resets them — RSS grew to
+   * 2.8 GB and the main thread blocked inside CanvasPattern::MoveTo -> malloc), so the
+   * frame stays exactly one buffer fill + one putPixels per repaint.
    */
-  stampGridPixels(dst: Uint8Array, w: number, h: number): void {
-    if (!(this.viewHeightW > 0) || this.canvasW <= 0) {
+  stampGridPixels(px: Uint8Array, w: number, h: number): void {
+    if (!(this.viewHeightW > 0) || w <= 0) {
       return;
     }
-    const scale: number = this.canvasW / this.viewHeightW;
+    const scale: number = h / this.viewHeightW; // device px per world unit
     const raw: number = this.viewHeightW / 10;
     const p: number = Math.pow(10, Math.floor(Math.log10(raw)));
     const r: number = raw / p;
@@ -329,35 +314,35 @@ struct Index {
     if (!(step > 0) || step > 1e30) {
       return;
     }
-    const worldLeft: number = this.viewCenterX - this.canvasW / 2 / scale;
-    const worldTop: number = this.viewCenterY + this.canvasH / 2 / scale;
+    const worldLeft: number = this.viewCenterX - w / 2 / scale;
+    const worldTop: number = this.viewCenterY + h / 2 / scale;
     let wx: number = Math.ceil(worldLeft / step) * step;
     let guard: number = 0;
-    while ((wx - worldLeft) * scale <= this.canvasW && guard < 256) {
+    while ((wx - worldLeft) * scale <= w && guard < 512) {
       const sx: number = Math.round((wx - worldLeft) * scale);
       if (sx >= 0 && sx < w) {
         for (let y: number = 0; y < h; y++) {
           const i: number = (y * w + sx) * 4;
-          dst[i] = Math.min(255, dst[i] + 20);
-          dst[i + 1] = Math.min(255, dst[i + 1] + 20);
-          dst[i + 2] = Math.min(255, dst[i + 2] + 20);
-          dst[i + 3] = 255;
+          px[i] = Math.min(255, px[i] + 20);
+          px[i + 1] = Math.min(255, px[i + 1] + 20);
+          px[i + 2] = Math.min(255, px[i + 2] + 20);
+          px[i + 3] = 255;
         }
       }
       wx += step;
       guard++;
     }
-    let wy: number = Math.ceil((worldTop - this.canvasH / scale) / step) * step;
+    let wy: number = Math.ceil((worldTop - h / scale) / step) * step;
     guard = 0;
-    while ((worldTop - wy) * scale <= this.canvasH && guard < 256) {
+    while ((worldTop - wy) * scale <= h && guard < 512) {
       const sy: number = Math.round((worldTop - wy) * scale);
       if (sy >= 0 && sy < h) {
         for (let x: number = 0; x < w; x++) {
           const i: number = (sy * w + x) * 4;
-          dst[i] = Math.min(255, dst[i] + 20);
-          dst[i + 1] = Math.min(255, dst[i + 1] + 20);
-          dst[i + 2] = Math.min(255, dst[i + 2] + 20);
-          dst[i + 3] = 255;
+          px[i] = Math.min(255, px[i] + 20);
+          px[i + 1] = Math.min(255, px[i + 1] + 20);
+          px[i + 2] = Math.min(255, px[i + 2] + 20);
+          px[i + 3] = 255;
         }
       }
       wy += step;
@@ -365,22 +350,12 @@ struct Index {
     }
   }
 
-  /** Instant pan feedback: blit the last full frame shifted by the accumulated pan. */
-  blitPanned(): void {
-    if (this.imgData === null || (this.panAccX === 0 && this.panAccY === 0)) {
-      return;
-    }
-    this.context.fillStyle = BG;
-    this.context.fillRect(0, 0, this.canvasW, this.canvasH);
-    this.context.putImageData(this.imgData, this.panAccX / this.dpr, this.panAccY / this.dpr);
-    // Grid is already baked into imgData — no Canvas path commands here either.
-  }
-
-  /** Crosshair overlay on the transparent second canvas (cheap: 2 lines + pickbox). */
+  /** Crosshair overlay: vector lines on the transparent second canvas (cheap, rare). */
   drawCrosshair(): void {
     this.ovlCtx.clearRect(0, 0, this.canvasW, this.canvasH);
     // 选择窗口：引擎 pending_window 起点到光标的虚线框。
-    if (this.windowFrom !== null && this.windowFrom.length === 2 && this.viewHeightW > 0) {
+    if (this.windowFrom !== null && this.windowFrom.length === 2 && this.viewHeightW > 0
+      && this.crossX >= 0) {
       const scale: number = this.canvasW / this.viewHeightW;
       const fx: number = (this.windowFrom[0] - this.viewCenterX) * scale + this.canvasW / 2;
       const fy: number = this.canvasH / 2 - (this.windowFrom[1] - this.viewCenterY) * scale;
@@ -410,7 +385,6 @@ struct Index {
       return;
     }
     this.ovlCtx.strokeStyle = 'rgba(223,230,238,0.75)';
-    this.ovlCtx.lineWidth = 1;
     this.ovlCtx.beginPath();
     this.ovlCtx.moveTo(0, this.crossY);
     this.ovlCtx.lineTo(this.canvasW, this.crossY);
@@ -443,7 +417,6 @@ struct Index {
     this.crossX = event.x;
     this.crossY = event.y;
     this.coordsText = this.worldText(event.x, event.y);
-    this.drawCrosshair();
     if (event.action === MouseAction.Move) {
       Cad.move(p[0], p[1]);
       if (this.middle.down) {
@@ -454,22 +427,19 @@ struct Index {
         this.panAccX += dx;
         this.panAccY += dy;
         Cad.pan(dx, dy);
-        this.blitPanned();
-        this.dirty = this.frames % 3 === 0; // full re-render throttled; blit keeps it smooth
+        this.dirty = this.frames % 3 === 0;
       }
-      // Hover moves only move the crosshair overlay (drawn above) and the engine cursor;
-      // while a command prompts, re-render so the rubber-band preview follows the cursor.
-      // Idle hover must NOT re-render: the emulator re-sends Move every vsync and a full
-      // re-render per Move spun at ~14fps forever (the ANR we hit).
-      this.dirty = this.prompt.length > 0;
+      // Hover while a command prompts re-renders so the rubber band follows the cursor;
+      // idle hover must not (the emulator re-sends Move every vsync — that ANR'd once).
+      this.dirty = this.dirty || this.prompt.length > 0;
       return;
     }
     if (event.action === MouseAction.Press) {
+      this.drawCrosshair();
       if (event.button === MouseButton.Middle) {
         this.middle.down = true;
         this.middle.lastX = p[0];
         this.middle.lastY = p[1];
-        // 右键交给 bindContextMenu（2in1 体验规范要求右键菜单）；菜单内含"取消 (Esc)"。
       } else if (event.button === MouseButton.Left) {
         this.applyState(Cad.click(p[0], p[1], false, this.ctrlHeld));
         this.dirty = true;
@@ -484,8 +454,6 @@ struct Index {
 
   handleTouch(event: TouchEvent): void {
     this.markActive();
-    // Single tap = click; two-finger drag = pan (with old-frame blit); pinch zoom is a
-    // PinchGesture below.
     if (event.type === TouchType.Up && event.changedTouches.length >= 1) {
       const t: TouchObject = event.changedTouches[0];
       const p: number[] = this.device(t.x, t.y);
@@ -499,10 +467,7 @@ struct Index {
       const b: TouchObject = event.touches[1];
       const cx: number[] = this.device((a.x + b.x) / 2, (a.y + b.y) / 2);
       if (this.middle.down) {
-        this.panAccX += cx[0] - this.middle.lastX;
-        this.panAccY += cx[1] - this.middle.lastY;
         Cad.pan(cx[0] - this.middle.lastX, cx[1] - this.middle.lastY);
-        this.blitPanned();
         this.dirty = this.frames % 4 === 0;
       }
       this.middle.down = true;
@@ -523,7 +488,6 @@ struct Index {
 
   handleKey(event: KeyEvent): void {
     this.markActive();
-    // Track Ctrl ourselves: ArkTS KeyEvent carries no modifier state in this SDK.
     if (event.keyCode === KeyCode.KEYCODE_CTRL_LEFT || event.keyCode === KeyCode.KEYCODE_CTRL_RIGHT) {
       this.ctrlHeld = event.type === KeyType.Down;
       return;
@@ -531,7 +495,6 @@ struct Index {
     if (event.type !== KeyType.Down) {
       return;
     }
-    // 快捷键（2in1 体验规范）：画布聚焦时 Esc/Enter，Ctrl+Z/Ctrl+Y 走自跟踪的 ctrlHeld。
     if (event.keyCode === KeyCode.KEYCODE_ESCAPE) {
       this.applyState(Cad.cancel());
       this.dirty = true;
@@ -565,7 +528,6 @@ struct Index {
       fs.closeSync(file);
       const name: string = uri.substring(uri.lastIndexOf('/') + 1);
       this.applyState(Cad.openDxf(name, buf));
-      this.needFit = true;
       this.dirty = true;
       return true;
     } catch (e) {
@@ -592,8 +554,6 @@ struct Index {
 
   /** Dev benchmark: load the packed thunder.dxf (rawfile) at startup. Keep small. */
   private async loadBenchmarkDrawing(): Promise<void> {
-    hilog.info(0x0000, 'cadcraft', 'loadBenchmarkDrawing enter');
-    // 文件关联打开的图优先于基准图；打不开（残留 uri、文件已删）再落回基准图。
     const uri = AppStorage.get<string>('hocadOpenUri');
     AppStorage.setOrCreate('hocadOpenUri', '');
     if (uri && this.openUri(uri)) {
@@ -604,9 +564,8 @@ struct Index {
         await getContext(this).resourceManager.getRawFileContent('thunder.dxf');
       const buf: ArrayBuffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
       this.applyState(Cad.openDxf('thunder.dxf', buf));
-      this.needFit = true;
+      this.needFit = true; // real canvas size arrives after layout — fit then
       this.dirty = true;
-      hilog.info(0x0000, 'cadcraft', 'thunder loaded');
     } catch (e) {
       // No thunder.dxf packed in this build — start on the empty drawing.
     }
@@ -645,7 +604,9 @@ struct Index {
         px[i] = px[i + 2];
         px[i + 2] = r;
       }
-      const size: image.Size = { width: this.imgW, height: this.imgH };
+      const w: number = Math.round(this.canvasW * this.dpr);
+      const h: number = Math.round(this.canvasH * this.dpr);
+      const size: image.Size = { width: w, height: h };
       const opts: image.InitializationOptions = {
         size: size,
         srcPixelFormat: image.PixelMapFormat.BGRA_8888
@@ -670,6 +631,7 @@ struct Index {
   submitCmd(): void {
     const text: string = this.cmdText.trim();
     this.cmdText = '';
+    this.suggestions = [];
     if (text.length > 0) {
       this.applyState(Cad.cmdline(text));
     } else {
@@ -748,8 +710,8 @@ struct Index {
     Row({ space: 2 }) {
       ForEach(this.menus, (m: CadMenu, idx: number) => {
         Button(m.title)
-          .fontSize(13).height(30).padding({ left: 10, right: 10 })
-          .backgroundColor(this.openMenu === idx ? PANEL_HI : PANEL)
+          .fontSize(13).height(28).padding({ left: 10, right: 10 })
+          .backgroundColor(this.openMenu === idx ? PANEL_HI : Color.Transparent)
           .fontColor(TEXT)
           .onClick((e: ClickEvent) => {
             this.menuX = Math.max(4, e.x - 10);
@@ -760,43 +722,108 @@ struct Index {
       Text('HoCAD').fontSize(13).fontColor(ACCENT).margin({ right: 8 })
     }
     .width('100%')
-    .height(36)
-    .padding({ left: 6, right: 6 })
+    .height(34)
+    .padding({ left: 8, right: 8 })
+  }
+
+  /** 顶部图标条：文件与视图操作。 */
+  @Builder
+  topIconBar() {
+    Row({ space: 10 }) {
+      ForEach(TOP_ICONS, (t: ToolDef) => {
+        Column({ space: 1 }) {
+          Image(t.icon)
+            .width(20)
+            .height(20)
+            .objectFit(ImageFit.Contain)
+            .onClick(() => this.runTopTool(t.id))
+          Text(t.label)
+            .fontSize(8)
+            .fontColor(DIM)
+        }
+        .onClick(() => this.runTopTool(t.id))
+      }, (t: ToolDef) => t.id)
+    }
+    .width('100%')
+    .height(40)
+    .padding({ left: 8, right: 8 })
+    .backgroundColor(PANEL)
+  }
+
+  runTopTool(id: string): void {
+    this.markActive();
+    if (id === 'open') {
+      this.openDxf();
+    } else if (id === 'save') {
+      this.saveDxf();
+    } else if (id === 'print') {
+      this.printView();
+    } else if (id === 'undo') {
+      this.keyword('undo');
+    } else if (id === 'redo') {
+      this.keyword('redo');
+    } else if (id === 'zoomextents') {
+      this.applyState(Cad.zoomExtents());
+      this.dirty = true;
+    }
+  }
+
+  @Builder
+  toolIcon(t: ToolDef) {
+    Column({ space: 2 }) {
+      Image(t.icon)
+        .width(24)
+        .height(24)
+        .objectFit(ImageFit.Contain)
+      Text(t.label)
+        .fontSize(8)
+        .fontColor(DIM)
+        .maxLines(1)
+    }
+    .width('100%')
+    .padding({ top: 4, bottom: 4 })
+    .borderRadius(4)
+    .onClick(() => this.startCommand(t.id))
   }
 
   @Builder
   toolColumn() {
     Scroll() {
       Column({ space: 4 }) {
-        Text('绘图').fontSize(12).fontColor(ACCENT).margin({ top: 8 })
-        ForEach(['line', 'circle', 'arc', 'mtext', 'dimlinear', 'hatch'], (c: string) => {
-          Button(c.toUpperCase())
-            .width(88)
-            .height(30)
-            .fontSize(12)
-            .backgroundColor(PANEL)
-            .fontColor(TEXT)
-            .onClick(() => this.startCommand(c))
-        }, (c: string) => c)
-        Text('修改').fontSize(12).fontColor(ACCENT).margin({ top: 8 })
-        ForEach(['erase', 'move', 'copy', 'offset', 'trim'], (c: string) => {
-          Button(c.toUpperCase())
-            .width(88)
-            .height(30)
-            .fontSize(12)
-            .backgroundColor(PANEL)
-            .fontColor(TEXT)
-            .onClick(() => this.startCommand(c))
-        }, (c: string) => c)
+        Text('绘图').fontSize(11).fontColor(ACCENT).margin({ top: 8 })
+        Grid() {
+          ForEach(DRAW_TOOLS, (t: ToolDef) => {
+            GridItem() {
+              this.toolIcon(t)
+            }
+          }, (t: ToolDef) => t.id)
+        }
+        .columnsTemplate('1fr 1fr')
+        .rowsGap(2)
+        .columnsGap(2)
+        .width('100%')
+        Text('修改').fontSize(11).fontColor(ACCENT).margin({ top: 8 })
+        Grid() {
+          ForEach(EDIT_TOOLS, (t: ToolDef) => {
+            GridItem() {
+              this.toolIcon(t)
+            }
+          }, (t: ToolDef) => t.id)
+        }
+        .columnsTemplate('1fr 1fr')
+        .rowsGap(2)
+        .columnsGap(2)
+        .width('100%')
       }
       .width('100%')
+      .padding({ bottom: 8 })
       .alignItems(HorizontalAlign.Center)
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Auto)
   }
 
-  /** 右侧图层列表：行点击 = 置为当前层（engine layer.current）。 */
+  /** 右侧图层列表：行点击 = 置为当前层；行 ⋯ = 动作面板（CRUD）。 */
   @Builder
   layersPanel() {
     Column({ space: 2 }) {
@@ -849,7 +876,8 @@ struct Index {
               const p: Record<string, string> = { 'name': l.name };
               this.applyState(Cad.execute('layer.current', p));
               this.dirty = true;
-            })          }, (l: CadLayer) => `${l.name}-${l.color}-${l.on}-${l.frozen}-${l.locked}-${this.currentLayer}`)
+            })
+          }, (l: CadLayer) => `${l.name}-${l.color}-${l.on}-${l.frozen}-${l.locked}-${this.currentLayer}`)
         }
         .width('100%')
       }
@@ -893,10 +921,10 @@ struct Index {
   @Builder
   tabsRow() {
     Row({ space: 2 }) {
-      ForEach(['模型'].concat(this.layouts), (name: string, i: number) => {
+      ForEach(['模型'].concat(this.layouts), (name: string) => {
         Button(name)
           .fontSize(11).height(24).padding({ left: 10, right: 10 })
-          .backgroundColor(this.spaceName === name || (name === '模型' && this.spaceName === '模型') ? PANEL_HI : PANEL)
+          .backgroundColor(this.spaceName === name ? PANEL_HI : PANEL)
           .fontColor(this.spaceName === name ? ACCENT : DIM)
           .onClick(() => {
             const p: Record<string, string> = { 'option': 'set', 'name': name };
@@ -932,45 +960,20 @@ struct Index {
 
           Column() {
             this.menuBar()
+            this.topIconBar()
             this.tabsRow()
 
-            // Canvas + crosshair overlay: click to pick, middle-drag / two-finger pan (old
-            // frame blit), pinch zoom, right-click menu, drag & drop a DXF to open.
+            // Drawing display: Image(pixelMap) 1:1 device pixels + vector overlay +
+            // zoom buttons. All input handlers live on the wrapping Stack.
             Stack({ alignContent: Alignment.BottomEnd }) {
-              Canvas(this.context)
-                .width('100%')
-                .height('100%')
-                // NOTE: no backgroundColor — ArkUI composites it OVER the recorded canvas
-                // instructions on this image, hiding every putImageData frame. drawFrame
-                // fills the background itself.
-                .onReady(() => this.onCanvasReady())
-                .onMouse((event: MouseEvent) => this.handleMouse(event))
-                .onTouch((event: TouchEvent) => this.handleTouch(event))
-                .onKeyEvent((event: KeyEvent) => this.handleKey(event))
-                // 焦点反馈（2in1 体验规范）：画布聚焦时描边高亮；点击即聚焦使快捷键生效。
-                .focusable(true)
-                .focusOnTouch(true)
-                .onFocus(() => {
-                  this.canvasFocused = true;
-                })
-                .onBlur(() => {
-                  this.canvasFocused = false;
-                })
-                .border({ width: 1, color: this.canvasFocused ? ACCENT : '#00000000' })
-                .allowDrop([uniformTypeDescriptor.UniformDataType.FILE])
-                .onDrop((event: DragEvent) => {
-                  const data: unifiedDataChannel.UnifiedData = event.getData();
-                  const records: unifiedDataChannel.UnifiedRecord[] = data.getRecords();
-                  for (const rec of records) {
-                    const file: unifiedDataChannel.File = rec as unifiedDataChannel.File;
-                    if (file.uri && file.uri.toLowerCase().endsWith('.dxf')) {
-                      this.openUri(file.uri);
-                    }
-                  }
-                })
-                .bindContextMenu(this.canvasMenu, ResponseType.RightClick)
-                .gesture(PinchGesture({ fingers: 2 })
-                  .onActionUpdate((event: GestureEvent) => this.handlePinch(event)))
+              if (this.pixelMap !== null) {
+                Image(this.pixelMap)
+                  .width('100%')
+                  .height('100%')
+                  .objectFit(ImageFit.Fill)
+                  .draggable(false)
+                  .autoResize(false)
+              }
               Canvas(this.ovlCtx)
                 .width('100%')
                 .height('100%')
@@ -1004,68 +1007,108 @@ struct Index {
               .margin(10)
             }
             .layoutWeight(1)
+            .backgroundColor(BG)
+            .focusable(true)
+            .focusOnTouch(true)
+            .onFocus(() => {
+              this.canvasFocused = true;
+            })
+            .onBlur(() => {
+              this.canvasFocused = false;
+            })
+            .border({ width: 1, color: this.canvasFocused ? ACCENT : '#00000000' })
+            .onAreaChange((_old: Area, newArea: Area) => {
+              this.onCanvasSize(Number(newArea.width), Number(newArea.height));
+            })
+            .onMouse((event: MouseEvent) => this.handleMouse(event))
+            .onTouch((event: TouchEvent) => this.handleTouch(event))
+            .onKeyEvent((event: KeyEvent) => this.handleKey(event))
+            .allowDrop([uniformTypeDescriptor.UniformDataType.FILE])
+            .onDrop((event: DragEvent) => {
+              const data: unifiedDataChannel.UnifiedData = event.getData();
+              const records: unifiedDataChannel.UnifiedRecord[] = data.getRecords();
+              for (const rec of records) {
+                const file: unifiedDataChannel.File = rec as unifiedDataChannel.File;
+                if (file.uri && file.uri.toLowerCase().endsWith('.dxf')) {
+                  this.openUri(file.uri);
+                }
+              }
+            })
+            .bindContextMenu(this.canvasMenu, ResponseType.RightClick)
+            .gesture(PinchGesture({ fingers: 2 })
+              .onActionUpdate((event: GestureEvent) => this.handlePinch(event)))
 
-            // Command line: history + prompt + keywords + input, like the desktop's strip.
-            Row({ space: 4 }) {
-              Column({ space: 2 }) {
+            // Command line: history + prompt + keywords + suggestions + input.
+            Column({ space: 2 }) {
+              Row({ space: 6 }) {
                 Text(this.prompt.length > 0 ? this.prompt : '命令:')
                   .fontSize(12)
                   .fontColor(ACCENT)
-                Scroll(this.histScroller) {
-                  Column({ space: 1 }) {
-                    ForEach(this.log, (line: string, i: number) => {
-                      Text(line)
-                        .fontSize(10)
-                        .fontColor(DIM)
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .width('100%')
-                    }, (line: string, i: number) => `${i}-${line}`)
-                  }
-                  .width('100%')
-                }
-                .scrollBar(BarState.Off)
-                .layoutWeight(1)
-
-                if (this.suggestions.length > 0) {
-                  Row({ space: 4 }) {
-                    ForEach(this.suggestions, (id: string) => {
-                      Text(id)
-                        .fontSize(10)
-                        .fontColor(TEXT)
-                        .padding({ left: 6, right: 6, top: 3, bottom: 3 })
-                        .borderRadius(3)
-                        .backgroundColor(PANEL_HI)
-                        .onClick(() => {
-                          this.cmdText = id;
-                          this.suggestions = [];
-                        })
-                    }, (id: string) => id)
-                  }
-                  .width('100%')
-                }
-                TextInput({ text: this.cmdText, placeholder: '输入命令或坐标，如 circle 0,0 5' })
-                  .width('100%')
-                  .height(30)
-                  .fontSize(13)
-                  .onChange((v: string) => {
-                    this.cmdText = v;
-                    // 命令补全：按前缀过滤命令 id（最多 6 条，点击填入输入框）。
-                    const t = v.trim().toLowerCase();
-                    if (t.length > 0) {
-                      this.suggestions = this.allIds.filter((id: string) => id.startsWith(t)).slice(0, 6);
-                    } else {
-                      this.suggestions = [];
-                    }
-                  })
-                  .onSubmit(() => this.submitCmd())
+                ForEach(this.keywords, (kw: string) => {
+                  Text(kw)
+                    .fontSize(11)
+                    .fontColor('#8fd8ef')
+                    .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+                    .borderRadius(3)
+                    .backgroundColor(PANEL_HI)
+                    .onClick(() => this.keyword(kw))
+                }, (kw: string) => kw)
               }
+              .width('100%')
+
+              Scroll(this.histScroller) {
+                Column({ space: 1 }) {
+                  ForEach(this.log, (line: string, i: number) => {
+                    Text(line)
+                      .fontSize(10)
+                      .fontColor(DIM)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .width('100%')
+                  }, (line: string, i: number) => `${i}-${line}`)
+                }
+                .width('100%')
+              }
+              .scrollBar(BarState.Off)
               .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start)
+
+              if (this.suggestions.length > 0) {
+                Row({ space: 4 }) {
+                  ForEach(this.suggestions, (id: string) => {
+                    Text(id)
+                      .fontSize(10)
+                      .fontColor(TEXT)
+                      .padding({ left: 6, right: 6, top: 3, bottom: 3 })
+                      .borderRadius(3)
+                      .backgroundColor(PANEL_HI)
+                      .onClick(() => {
+                        this.cmdText = id;
+                        this.suggestions = [];
+                      })
+                  }, (id: string) => id)
+                }
+                .width('100%')
+              }
+
+              TextInput({ text: this.cmdText, placeholder: '输入命令或坐标，如 circle 0,0 5' })
+                .width('100%')
+                .height(30)
+                .fontSize(13)
+                .onChange((v: string) => {
+                  this.cmdText = v;
+                  // 命令补全：按前缀过滤命令 id（最多 6 条，点击填入输入框）。
+                  const t = v.trim().toLowerCase();
+                  if (t.length > 0) {
+                    this.suggestions = this.allIds.filter((id: string) => id.startsWith(t)).slice(0, 6);
+                  } else {
+                    this.suggestions = [];
+                  }
+                })
+                .onSubmit(() => this.submitCmd())
             }
             .width('100%')
-            .height(110)
-            .padding({ left: 6, right: 6, top: 4, bottom: 4 })
+            .height(130)
+            .padding({ left: 8, right: 8, top: 4, bottom: 4 })
             .backgroundColor(PANEL)
 
             Row({ space: 8 }) {
@@ -1106,134 +1149,133 @@ struct Index {
             }
             .width('100%')
             .height(26)
-            .padding({ left: 6, right: 6 })
+            .padding({ left: 8, right: 8 })
           }
           .layoutWeight(1)
         }
         .layoutWeight(1)
+
+        // 系统下拉菜单（真菜单栏）：点空白关闭的遮罩。
+        if (this.openMenu >= 0 && this.openMenu < this.menus.length) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .onClick(() => {
+              this.openMenu = -1;
+            })
+        }
+        if (this.openMenu >= 0 && this.openMenu < this.menus.length) {
+          Column({ space: 1 }) {
+            ForEach(this.menus[this.openMenu].items, (it: CadMenuItem) => {
+              Row({ space: 6 }) {
+                Text(it.label)
+                  .fontSize(12)
+                  .fontColor(TEXT)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .layoutWeight(1)
+                if (it.key) {
+                  Text(it.key).fontSize(10).fontColor(DIM)
+                }
+              }
+              .width('100%')
+              .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+              .borderRadius(3)
+              .onClick(() => this.runMenu(it.id))
+            }, (it: CadMenuItem) => `${it.id}-${it.label}`)
+          }
+          .width(260)
+          .padding(4)
+          .borderRadius(6)
+          .backgroundColor(PANEL_HI)
+          .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
+          .position({ x: this.menuX, y: 36 })
+        }
+
+        // 图层动作面板（图层行 ⋯ 打开）。
+        if (this.ctxOpen) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .onClick(() => {
+              this.ctxOpen = false;
+            })
+        }
+        if (this.ctxOpen) {
+          Column({ space: 1 }) {
+            Text(this.ctxLayer).fontSize(11).fontColor(ACCENT).padding(6)
+            ForEach(['置当前', '显示/隐藏', '冻结/解冻', '锁定/解锁', '删除图层'], (act: string) => {
+              Text(act)
+                .fontSize(12).fontColor(TEXT)
+                .width('100%')
+                .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+                .onClick(() => {
+                  this.layerAction(act);
+                  this.ctxOpen = false;
+                })
+            }, (act: string) => act)
+          }
+          .width(180)
+          .padding(4)
+          .borderRadius(6)
+          .backgroundColor(PANEL_HI)
+          .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
+          .position({ x: 100, y: 120 })
+        }
+
+        // 新建图层弹窗。
+        if (this.layerNewOpen) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('rgba(0,0,0,0.4)')
+            .onClick(() => {
+              this.layerNewOpen = false;
+            })
+        }
+        if (this.layerNewOpen) {
+          Column({ space: 8 }) {
+            Text('新建图层').fontSize(14).fontColor(TEXT)
+            TextInput({ placeholder: '图层名' })
+              .width(200)
+              .height(34)
+              .onChange((v: string) => {
+                this.newLayerName = v;
+              })
+            Row({ space: 8 }) {
+              Button('取消')
+                .fontSize(12).height(30)
+                .backgroundColor(PANEL).fontColor(TEXT)
+                .onClick(() => {
+                  this.layerNewOpen = false;
+                  this.newLayerName = '';
+                })
+              Button('创建')
+                .fontSize(12).height(30)
+                .backgroundColor(ACCENT).fontColor('#0b1a20')
+                .onClick(() => {
+                  const name = this.newLayerName.trim();
+                  if (name.length > 0) {
+                    const p: Record<string, string | boolean> = { 'name': name, 'current': true };
+                    this.applyState(Cad.execute('layer.new', p));
+                    this.dirty = true;
+                  }
+                  this.layerNewOpen = false;
+                  this.newLayerName = '';
+                })
+            }
+          }
+          .padding(14)
+          .borderRadius(8)
+          .backgroundColor(PANEL_HI)
+          .position({ x: 180, y: 200 })
+        }
       }
       .width('100%')
       .height('100%')
-
-      // 系统下拉菜单（真菜单栏）：点空白关闭的遮罩。
-      if (this.openMenu >= 0 && this.openMenu < this.menus.length) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .onClick(() => {
-            this.openMenu = -1;
-          })
-      }
-      // 下拉菜单面板：菜单栏下方、按钮 x 处。
-      if (this.openMenu >= 0 && this.openMenu < this.menus.length) {
-        Column({ space: 1 }) {
-          ForEach(this.menus[this.openMenu].items, (it: CadMenuItem) => {
-            Row({ space: 6 }) {
-              Text(it.label)
-                .fontSize(12)
-                .fontColor(TEXT)
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .layoutWeight(1)
-              if (it.key) {
-                Text(it.key).fontSize(10).fontColor(DIM)
-              }
-            }
-            .width('100%')
-            .padding({ left: 10, right: 10, top: 7, bottom: 7 })
-            .borderRadius(3)
-            .onClick(() => this.runMenu(it.id))
-          }, (it: CadMenuItem) => `${it.id}-${it.label}`)
-        }
-        .width(260)
-        .padding(4)
-        .borderRadius(6)
-        .backgroundColor(PANEL_HI)
-        .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
-        .position({ x: this.menuX, y: 40 })
-      }
-
-      // 图层动作面板（图层行 ⋯ 打开）：置当前 / 开关 / 冻结 / 锁定 / 删除。
-      if (this.ctxOpen) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .onClick(() => {
-            this.ctxOpen = false;
-          })
-      }
-      if (this.ctxOpen) {
-        Column({ space: 1 }) {
-          Text(this.ctxLayer).fontSize(11).fontColor(ACCENT).padding(6)
-          ForEach(['置当前', '显示/隐藏', '冻结/解冻', '锁定/解锁', '删除图层'], (act: string) => {
-            Text(act)
-              .fontSize(12).fontColor(TEXT)
-              .width('100%')
-              .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-              .onClick(() => {
-                this.layerAction(act);
-                this.ctxOpen = false;
-              })
-          }, (act: string) => act)
-        }
-        .width(180)
-        .padding(4)
-        .borderRadius(6)
-        .backgroundColor(PANEL_HI)
-        .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
-        .position({ x: this.canvasW - 190, y: 60 })
-      }
-
-      // 新建图层弹窗。
-      if (this.layerNewOpen) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor('rgba(0,0,0,0.4)')
-          .onClick(() => {
-            this.layerNewOpen = false;
-          })
-      }
-      if (this.layerNewOpen) {
-        Column({ space: 8 }) {
-          Text('新建图层').fontSize(14).fontColor(TEXT)
-          TextInput({ placeholder: '图层名' })
-            .width(200)
-            .height(34)
-            .onChange((v: string) => {
-              this.newLayerName = v;
-            })
-          Row({ space: 8 }) {
-            Button('取消')
-              .fontSize(12).height(30)
-              .backgroundColor(PANEL).fontColor(TEXT)
-              .onClick(() => {
-                this.layerNewOpen = false;
-                this.newLayerName = '';
-              })
-            Button('创建')
-              .fontSize(12).height(30)
-              .backgroundColor(ACCENT).fontColor('#0b1a20')
-              .onClick(() => {
-                const name = this.newLayerName.trim();
-                if (name.length > 0) {
-                  const p: Record<string, string | boolean> = { 'name': name, 'current': true };
-                  this.applyState(Cad.execute('layer.new', p));
-                  this.dirty = true;
-                }
-                this.layerNewOpen = false;
-                this.newLayerName = '';
-              })
-          }
-        }
-        .padding(14)
-        .borderRadius(8)
-        .backgroundColor(PANEL_HI)
-        .position({ x: this.canvasW / 2 - 120, y: this.canvasH / 2 - 60 })
-      }
+      .backgroundColor(BG)
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(BG)
   }
 }

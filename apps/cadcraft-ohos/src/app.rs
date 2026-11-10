@@ -189,6 +189,31 @@ impl App {
             .session
             .pending_window
             .map(|w| serde_json::json!([w.corner.x, w.corner.y]));
+        // Grip points of the selection (editable defining points, world coords) for the
+        // shell's grip squares and grip-edit targeting.
+        let grips: Vec<serde_json::Value> = if let Ok(d) = self.session.doc() {
+            handles
+                .iter()
+                .filter_map(|h| d.model.get(*h))
+                .flat_map(|e| {
+                    e.kind
+                        .grips()
+                        .into_iter()
+                        .enumerate()
+                        .map(move |(i, g)| {
+                            serde_json::json!({
+                                "handle": e.handle.0,
+                                "index": i,
+                                "x": g.x,
+                                "y": g.y,
+                            })
+                        })
+                })
+                .take(400)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let state = serde_json::json!({
             "ok": true,
             "epoch": self.session.doc_epoch,
@@ -207,6 +232,7 @@ impl App {
             "ortho": ortho,
             "osnap": osnap,
             "window": window,
+            "grips": grips,
             "prompting": prompt.is_some(),
             "prompt": prompt,
             "view": { "center": [view.center.x, view.center.y], "height": view.height },

@@ -36,6 +36,13 @@ export interface CadSel {
   color: string;
 }
 
+export interface CadGrip {
+  handle: number;
+  index: number;
+  x: number;
+  y: number;
+}
+
 export interface CadMenuItem {
   label: string;
   id: string;
@@ -70,6 +77,7 @@ export interface CadState {
   ortho: boolean;
   osnap: boolean;
   window: number[] | null;
+  grips: CadGrip[];
   result?: object;
   log: string[];
 }
@@ -85,7 +93,7 @@ function parse(json: string): CadState {
     state = {
       ok: false, error: `${e}`, epoch: 0, prompting: false, prompt: null,
       view: EMPTY_VIEW, canvas: EMPTY_CANVAS, log: [], layers: [], currentLayer: '',
-      selection: [], space: '', layouts: [], docs: [], doc: 0,
+      selection: [], grips: [], space: '', layouts: [], docs: [], doc: 0,
       ortho: false, osnap: false, window: null
     };
   }
@@ -118,6 +126,9 @@ function parse(json: string): CadState {
   }
   if (!state.window) {
     state.window = null;
+  }
+  if (!state.grips) {
+    state.grips = [];
   }
   return state;
 }

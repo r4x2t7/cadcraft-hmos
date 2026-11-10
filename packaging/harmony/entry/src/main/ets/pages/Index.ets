@@ -14,7 +14,7 @@
 //   grid is stamped into the frame pixels and the overlay canvas redraws only on rare
 //   events, never per frame.
 
-import { Cad, CadState, CadView, CadLayer, CadSel, CadMenu, CadMenuItem } from '../bridge/CadBridge';
+import { Cad, CadState, CadView, CadLayer, CadSel, CadMenu, CadMenuItem, CadGrip } from '../bridge/CadBridge';
 import picker from '@ohos.file.picker';
 import fs from '@ohos.file.fs';
 import { image } from '@kit.ImageKit';
@@ -100,6 +100,10 @@ struct Index {
   @State ortho: boolean = false;
   @State osnap: boolean = false;
   @State windowFrom: number[] | null = null;
+  @State grips: CadGrip[] = [];
+  @State hotGrip: CadGrip | null = null;
+  @State gripModeOpen: boolean = false;
+  @State pendingGripMode: string = 'move';
   @State suggestions: string[] = [];
   @State layerNewOpen: boolean = false;
   @State newLayerName: string = '';
@@ -208,6 +212,7 @@ struct Index {
     this.ortho = state.ortho;
     this.osnap = state.osnap;
     this.windowFrom = state.window;
+    this.grips = state.grips;
     if (state.frameMs !== undefined && state.frameMs > 0) {
       const vis: string = (state.visible !== undefined && state.total !== undefined && state.visible < state.total)
         ? ` ${state.visible}/${state.total}`
@@ -441,8 +446,25 @@ struct Index {
         this.middle.lastX = p[0];
         this.middle.lastY = p[1];
       } else if (event.button === MouseButton.Left) {
-        this.applyState(Cad.click(p[0], p[1], false, this.ctrlHeld));
-        this.dirty = true;
+        if (this.hotGrip !== null) {
+          // 热夹点待命：这次点击就是目标点（世界坐标由视图换算）。
+          const scale: number = this.canvasW / this.viewHeightW;
+          const wx: number = this.viewCenterX + (event.x - this.canvasW / 2) / scale;
+          const wy: number = this.viewCenterY - (event.y - this.canvasH / 2) / scale;
+          this.runGripMode(this.pendingGripMode, wx, wy);
+          this.hotGrip = null;
+          this.dirty = true;
+        } else {
+          const g = this.gripAt(event.x, event.y);
+          if (g !== null) {
+            this.hotGrip = g;
+            this.gripModeOpen = true;
+            this.markActive();
+          } else {
+            this.applyState(Cad.click(p[0], p[1], false, this.ctrlHeld));
+          }
+          this.dirty = true;
+        }
       }
       return;
     }
@@ -497,6 +519,8 @@ struct Index {
     }
     if (event.keyCode === KeyCode.KEYCODE_ESCAPE) {
       this.applyState(Cad.cancel());
+      this.hotGrip = null;
+      this.gripModeOpen = false;
       this.dirty = true;
     } else if (event.keyCode === KeyCode.KEYCODE_ENTER) {
       this.applyState(Cad.enter());
@@ -514,6 +538,44 @@ struct Index {
       this.applyState(Cad.zoom(0.8, p[0], p[1]));
       this.dirty = true;
     }
+  }
+
+  // ---------------- grips ----------------
+
+  /** 夹点命中：点击点（vp）附近 12vp 内的夹点，取最近。 */
+  gripAt(xVp: number, yVp: number): CadGrip | null {
+    let best: CadGrip | null = null;
+    let bestD: number = 12;
+    for (const g of this.grips) {
+      const scale: number = this.canvasW / this.viewHeightW;
+      const gx: number = (g.x - this.viewCenterX) * scale + this.canvasW / 2;
+      const gy: number = this.canvasH / 2 - (g.y - this.viewCenterY) * scale;
+      const d: number = Math.hypot(gx - xVp, gy - yVp);
+      if (d < bestD) {
+        bestD = d;
+        best = g;
+      }
+    }
+    return best;
+  }
+
+  /** 热夹点 + 模式：一次点击目标点，执行 grip.move/stretch/rotate/scale/mirror。 */
+  runGripMode(mode: string, toX: number, toY: number): void {
+    const g = this.hotGrip;
+    if (g === null) {
+      return;
+    }
+    const handles: number[] = [g.handle];
+    const p: Record<string, string | number | number[] | boolean> = {
+      'handles': handles,
+      'baseHandle': g.handle,
+      'index': g.index,
+      'to': [toX, toY],
+      'copy': mode === 'moveCopy'
+    };
+    const cmd = mode === 'moveCopy' ? 'grip.move' : `grip.${mode}`;
+    this.applyState(Cad.execute(cmd, p));
+    this.dirty = true;
   }
 
   // ---------------- files ----------------
@@ -1271,6 +1333,39 @@ struct Index {
           .backgroundColor(PANEL_HI)
           .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
           .position({ x: 100, y: 120 })
+        }
+
+        // 夹点模式菜单（点中夹点后弹出）：移动 / 带复制移动 / 拉伸 / 旋转 / 缩放 / 镜像。
+        if (this.gripModeOpen && this.hotGrip !== null) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .onClick(() => {
+              this.gripModeOpen = false;
+              this.hotGrip = null;
+            })
+        }
+        if (this.gripModeOpen && this.hotGrip !== null) {
+          Column({ space: 1 }) {
+            Text(`夹点 #${this.hotGrip.handle.toString(16).toUpperCase()}.${this.hotGrip.index} → 点画布目标点`)
+              .fontSize(10).fontColor(ACCENT).padding(6)
+            ForEach(['move', 'moveCopy', 'stretch', 'rotate', 'scale', 'mirror'], (mode: string) => {
+              Text(mode === 'moveCopy' ? '移动（复制）' : mode === 'move' ? '移动' : mode === 'stretch' ? '拉伸' : mode === 'rotate' ? '旋转' : mode === 'scale' ? '缩放' : '镜像')
+                .fontSize(12).fontColor(TEXT)
+                .width('100%')
+                .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+                .onClick(() => {
+                  this.pendingGripMode = mode;
+                  this.gripModeOpen = false;
+                })
+            }, (mode: string) => mode)
+          }
+          .width(200)
+          .padding(4)
+          .borderRadius(6)
+          .backgroundColor(PANEL_HI)
+          .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
+          .position({ x: this.canvasW / 2 - 100, y: 80 })
         }
 
         // 新建图层弹窗。

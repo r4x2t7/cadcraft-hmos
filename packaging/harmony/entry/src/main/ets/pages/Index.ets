@@ -80,6 +80,8 @@ struct Index {
   @State keywords: string[] = [];
   @State log: string[] = [];
   @State status: string = '';
+  @State toast: string = '';
+  private toastAt: number = 0;
   @State cmdText: string = '';
   @State canvasFocused: boolean = false;
   @State lastPinch: number = 1;
@@ -202,6 +204,17 @@ struct Index {
     this.lastActive = Date.now();
   }
 
+  /** 瞬态消息：3 秒自动消失，不被 poll 覆盖。 */
+  showToast(msg: string): void {
+    this.toast = msg;
+    this.toastAt = Date.now();
+    setTimeout(() => {
+      if (Date.now() - this.toastAt >= 2800) {
+        this.toast = '';
+      }
+    }, 3000);
+  }
+
   /** 工具 tooltip：长按图标显示说明，2.5s 自动消失。 */
   showTip(text: string): void {
     this.tipText = text;
@@ -214,8 +227,8 @@ struct Index {
   }
 
   applyState(state: CadState): void {
-    if (!state.ok && state.error) {
-      this.status = `错误: ${state.error}`;
+    if (!state.ok && state.error && Date.now() - this.toastAt >= 2000) {
+      this.showToast(`错误: ${state.error}`);
     }
     this.prompt = state.prompt ? state.prompt.message : '';
     this.keywords = state.prompt ? state.prompt.keywords : [];
@@ -318,7 +331,7 @@ struct Index {
       }
     } catch (e) {
       hilog.error(0x0000, 'cadcraft', 'drawFrame catch: %{public}s', `${e}`);
-      this.status = `渲染: ${e}`;
+      this.showToast(`渲染: ${e}`);
     }
   }
 
@@ -455,8 +468,9 @@ struct Index {
         Cad.pan(dx, dy);
         this.dirty = this.frames % 3 === 0;
       }
-      // Hover while a command prompts re-renders so the rubber band follows the cursor;
-      // idle hover must not (the emulator re-sends Move every vsync — that ANR'd once).
+      // 十字光标 overlay 每次 Move 重画（clearRect + 2 线 + 1 框，矢量不积累指令）。
+      // Hover 命令提示时重渲橡皮筋；空闲 hover 不重渲主画布（防 vsync Move 风暴 ANR）。
+      this.drawCrosshair();
       this.dirty = this.dirty || this.prompt.length > 0;
       return;
     }
@@ -612,7 +626,7 @@ struct Index {
       this.dirty = true;
       return true;
     } catch (e) {
-      this.status = `打开: ${e}`;
+      this.showToast(`打开: ${e}`);
       return false;
     }
   }
@@ -629,7 +643,7 @@ struct Index {
       }
       this.openUri(uris[0]);
     } catch (e) {
-      this.status = `打开: ${e}`;
+      this.showToast(`打开: ${e}`);
     }
   }
 
@@ -667,14 +681,14 @@ struct Index {
       fs.closeSync(file);
       this.log.push(`已保存 ${uris[0]}`);
     } catch (e) {
-      this.status = `保存: ${e}`;
+      this.showToast(`保存: ${e}`);
     }
   }
 
   /** 打印当前视图：lastBuf → PixelMap（打印路径按 BGRA 读，先换 R/B）→ PNG → Print Kit。 */
   async printView(): Promise<void> {
     if (this.lastBuf.byteLength === 0) {
-      this.status = '打印: 画布尚未渲染';
+      this.showToast('打印: 画布尚未渲染');
       return;
     }
     try {
@@ -701,9 +715,9 @@ struct Index {
       fs.closeSync(file);
       await pm.release();
       await print.print([pngPath]);
-      this.status = '打印: 已提交系统打印';
+      this.showToast('打印: 已提交系统打印');
     } catch (e) {
-      this.status = `打印: ${e}`;
+      this.showToast(`打印: ${e}`);
     }
   }
 
@@ -736,6 +750,8 @@ struct Index {
     // 菜单命令统一从命令行走：引擎解析别名并按需启动交互提示，与桌面一致。
     this.applyState(Cad.cmdline(id));
     this.dirty = true;
+    // 键盘留在命令行（桌面行为）：Enter 后重新聚焦。
+    focusControl.requestFocus('cmdInput');
   }
 
   /** 图层行 ⋯ 面板的动作（全部走引擎命令：layer.current / layer.set / layer.delete）。 */
@@ -1272,6 +1288,7 @@ struct Index {
               }
 
               TextInput({ text: this.cmdText, placeholder: '输入命令或坐标，如 circle 0,0 5' })
+                .id('cmdInput')
                 .width('100%')
                 .height(30)
                 .fontSize(13)
@@ -1292,6 +1309,15 @@ struct Index {
             .padding({ left: 8, right: 8, top: 4, bottom: 4 })
             .backgroundColor(PANEL)
 
+            if (this.toast.length > 0) {
+              Text(this.toast)
+                .fontSize(11)
+                .fontColor('#ffd4a0')
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .borderRadius(4)
+                .backgroundColor('rgba(0,0,0,0.6)')
+                .position({ x: 12, y: this.canvasH - 40 })
+            }
             Row({ space: 8 }) {
               Text(this.coordsText.length > 0 ? this.coordsText : '0.00, 0.00')
                 .fontSize(11)

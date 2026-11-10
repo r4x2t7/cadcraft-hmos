@@ -43,33 +43,34 @@ class MiddleDrag {
 interface ToolDef {
   id: string;
   label: string;
+  desc: string;
   icon: Resource;
 }
 
 const DRAW_TOOLS: ToolDef[] = [
-  { id: 'line', label: 'LINE', icon: $r('app.media.icon_line') },
-  { id: 'circle', label: 'CIRCLE', icon: $r('app.media.icon_circle') },
-  { id: 'arc', label: 'ARC', icon: $r('app.media.icon_arc') },
-  { id: 'mtext', label: 'MTEXT', icon: $r('app.media.icon_mtext') },
-  { id: 'dimlinear', label: 'DIM', icon: $r('app.media.icon_dimlinear') },
-  { id: 'hatch', label: 'HATCH', icon: $r('app.media.icon_hatch') },
+  { id: 'line', label: 'LINE', desc: '画直线：指定两点', icon: $r('app.media.icon_line') },
+  { id: 'circle', label: 'CIRCLE', desc: '画圆：指定圆心和半径', icon: $r('app.media.icon_circle') },
+  { id: 'arc', label: 'ARC', desc: '画弧：起点、弧上一点、端点', icon: $r('app.media.icon_arc') },
+  { id: 'mtext', label: 'MTEXT', desc: '多行文字：输入后点画布放置', icon: $r('app.media.icon_mtext') },
+  { id: 'dimlinear', label: 'DIM', desc: '线性标注：标注两点间距离', icon: $r('app.media.icon_dimlinear') },
+  { id: 'hatch', label: 'HATCH', desc: '填充：选图案后点封闭区域内部', icon: $r('app.media.icon_hatch') },
 ];
 
 const EDIT_TOOLS: ToolDef[] = [
-  { id: 'erase', label: 'ERASE', icon: $r('app.media.icon_erase') },
-  { id: 'move', label: 'MOVE', icon: $r('app.media.icon_move') },
-  { id: 'copy', label: 'COPY', icon: $r('app.media.icon_copy') },
-  { id: 'offset', label: 'OFFSET', icon: $r('app.media.icon_offset') },
-  { id: 'trim', label: 'TRIM', icon: $r('app.media.icon_trim') },
+  { id: 'erase', label: 'ERASE', desc: '删除：选择对象后删除', icon: $r('app.media.icon_erase') },
+  { id: 'move', label: 'MOVE', desc: '移动：选择对象，指定位移', icon: $r('app.media.icon_move') },
+  { id: 'copy', label: 'COPY', desc: '复制：选择对象，复制到位', icon: $r('app.media.icon_copy') },
+  { id: 'offset', label: 'OFFSET', desc: '偏移：按距离作出平行对象', icon: $r('app.media.icon_offset') },
+  { id: 'trim', label: 'TRIM', desc: '修剪：选边界后裁掉多余部分', icon: $r('app.media.icon_trim') },
 ];
 
 const TOP_ICONS: ToolDef[] = [
-  { id: 'open', label: '打开', icon: $r('app.media.icon_open') },
-  { id: 'save', label: '保存', icon: $r('app.media.icon_save') },
-  { id: 'print', label: '打印', icon: $r('app.media.icon_print') },
-  { id: 'undo', label: 'UNDO', icon: $r('app.media.icon_undo') },
-  { id: 'redo', label: 'REDO', icon: $r('app.media.icon_redo') },
-  { id: 'zoomextents', label: '缩放范围', icon: $r('app.media.icon_zoomextents') },
+  { id: 'open', label: '打开', desc: '打开 DXF 图纸', icon: $r('app.media.icon_open') },
+  { id: 'save', label: '保存', desc: '保存当前图为 DXF', icon: $r('app.media.icon_save') },
+  { id: 'print', label: '打印', desc: '打印当前视图', icon: $r('app.media.icon_print') },
+  { id: 'undo', label: 'UNDO', desc: '撤销上一步', icon: $r('app.media.icon_undo') },
+  { id: 'redo', label: 'REDO', desc: '重做', icon: $r('app.media.icon_redo') },
+  { id: 'zoomextents', label: '缩放范围', desc: '缩放到图纸全范围', icon: $r('app.media.icon_zoomextents') },
 ];
 
 @Entry
@@ -116,6 +117,8 @@ struct Index {
   @State mtextText: string = '';
   @State mtextHeight: string = '2.5';
   @State pendingPlace: string = ''; // '' | 'hatch' | 'mtext'
+  @State tipText: string = '';
+  private tipTimer: number = -1;
   @State pmVersion: number = 0; // bumps when a new pixelMap is installed (Image refresh)
   private allIds: string[] = [];
   private overlaySettings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -197,6 +200,17 @@ struct Index {
 
   markActive(): void {
     this.lastActive = Date.now();
+  }
+
+  /** 工具 tooltip：长按图标显示说明，2.5s 自动消失。 */
+  showTip(text: string): void {
+    this.tipText = text;
+    if (this.tipTimer >= 0) {
+      clearTimeout(this.tipTimer);
+    }
+    this.tipTimer = setTimeout(() => {
+      this.tipText = '';
+    }, 2500);
   }
 
   applyState(state: CadState): void {
@@ -816,6 +830,9 @@ struct Index {
             .fontColor(DIM)
         }
         .onClick(() => this.runTopTool(t.id))
+        // 长按显示命令说明（工具 tooltip）。
+        .gesture(LongPressGesture({ duration: 400, repeat: false })
+          .onAction(() => this.showTip(t.desc)))
       }, (t: ToolDef) => t.id)
     }
     .width('100%')
@@ -866,6 +883,8 @@ struct Index {
         this.startCommand(t.id);
       }
     })
+    .gesture(LongPressGesture({ duration: 400, repeat: false })
+      .onAction(() => this.showTip(t.desc)))
   }
 
   @Builder
@@ -1361,6 +1380,18 @@ struct Index {
           .backgroundColor(PANEL_HI)
           .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
           .position({ x: this.menuX, y: 36 })
+        }
+
+        // 工具 tooltip（长按图标显示）。
+        if (this.tipText.length > 0) {
+          Text(this.tipText)
+            .fontSize(11)
+            .fontColor(TEXT)
+            .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+            .borderRadius(5)
+            .backgroundColor(PANEL_HI)
+            .shadow({ radius: 8, color: 'rgba(0,0,0,0.4)', offsetY: 2 })
+            .position({ x: 108, y: 84 })
         }
 
         // 图层动作面板（图层行 ⋯ 打开）。

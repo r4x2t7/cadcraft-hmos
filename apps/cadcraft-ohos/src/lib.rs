@@ -104,6 +104,7 @@ unsafe extern "C" fn init(env: ffi::Env, exports: ffi::Value) -> ffi::Value {
         ("cadSaveDxf", Some(cad_save_dxf)),
         ("cadState", Some(cad_state)),
         ("cadDocSwitch", Some(cad_doc_switch)),
+        ("cadGripEdit", Some(cad_grip_edit)),
         ("cadFrameInto", Some(cad_frame)),
     ];
     let props: Vec<(std::ffi::CString, ffi::PropertyDescriptor)> =
@@ -287,6 +288,29 @@ unsafe extern "C" fn cad_doc_switch(env: ffi::Env, info: ffi::CallbackInfo) -> f
     match index {
         Some(i) if i >= 0.0 => js_result(env, with_app(|app| app.doc_switch(i as usize))),
         _ => ffi::js_error(env, "cadDocSwitch(index)"),
+    }
+}
+
+unsafe extern "C" fn cad_grip_edit(env: ffi::Env, info: ffi::CallbackInfo) -> ffi::Value {
+    let a = ffi::args(env, info);
+    // Arg: [[handle, index], …] — numbers from the shell's grip selection.
+    let raw = a.first().copied().and_then(|v| ffi::arg_bytes(env, v));
+    match raw {
+        Some((len, data)) => {
+            // SAFETY: `data`/`len` describe the loader-provided ArrayBuffer, read-only here.
+            let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
+            let u64s: Vec<u64> = bytes
+                .chunks_exact(8)
+                .map(|c| u64::from_le_bytes(c.try_into().unwrap_or([0; 8])))
+                .collect();
+            let grips: Vec<(u64, usize)> = u64s
+                .chunks(2)
+                .filter(|c| c.len() == 2)
+                .map(|c| (c[0], c[1] as usize))
+                .collect();
+            js_result(env, with_app(|app| app.grip_edit(&grips)))
+        }
+        None => ffi::js_error(env, "cadGripEdit(arrayBuffer of u64 pairs)"),
     }
 }
 

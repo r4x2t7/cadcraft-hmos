@@ -200,6 +200,22 @@ export class Cad {
     return native.cadSaveDxf() as string;
   }
 
+  /**
+   * Start a grip edit on hot grips [[handle, index], …]. The running GRIP command then
+   * consumes clicks as the target point (cadClick), Space cycles modes (cadEnter), and
+   * 'copy'/'base' keywords work through cadCmdline — the whole edit is one undo step.
+   */
+  static gripEdit(grips: number[][]): CadState {
+    // Pack as u64 little-endian pairs over an ArrayBuffer (8 bytes per number).
+    const out = new ArrayBuffer(grips.length * 16);
+    const view = new DataView(out);
+    grips.forEach((g, i) => {
+      view.setBigUint64(i * 16, BigInt(g[0]), true);
+      view.setBigUint64(i * 16 + 8, BigInt(g[1]), true);
+    });
+    return parse(native.cadGripEdit(out) as string);
+  }
+
   /** Switch the active document tab. */
   static docSwitch(index: number): CadState {
     return parse(native.cadDocSwitch(index) as string);

@@ -108,6 +108,19 @@ impl App {
         serde_json::to_string(&root).map_err(|e| format!("menus: {e}"))
     }
 
+    /// Start a grip edit on hot grips [[handle, index], …] (engine `start_grip_edit`).
+    /// The whole edit — moves, copies, mode cycling — is one undo step.
+    pub fn grip_edit(&mut self, grips: &[(u64, usize)]) -> Result<String, String> {
+        let hs: Vec<(cadcraft_doc::Handle, usize)> = grips
+            .iter()
+            .map(|(h, i)| (cadcraft_doc::Handle(*h), *i))
+            .collect();
+        self.session
+            .start_grip_edit(&hs)
+            .map_err(|e| format!("{e}"))?;
+        self.state_json()
+    }
+
     /// Switch the active document tab (the engine exposes `docs`/`active` directly).
     pub fn doc_switch(&mut self, index: usize) -> Result<String, String> {
         if index < self.session.docs.len() {

@@ -147,7 +147,10 @@ struct Index {
   @State mtextOpen: boolean = false;
   @State mtextText: string = '';
   @State mtextHeight: string = '2.5';
-  @State pendingPlace: string = ''; // '' | 'hatch' | 'mtext'
+  @State pendingPlace: string = '';
+  @State zoomWinMode: boolean = false;
+  @State zoomWinFirst: number[] | null = null;
+  @State snapMark: number[] | null = null; // '' | 'hatch' | 'mtext'
   @State tipText: string = '';
   private tipTimer: number = -1;
   @State pmVersion: number = 0; // bumps when a new pixelMap is installed (Image refresh)
@@ -275,6 +278,7 @@ struct Index {
     this.ortho = state.ortho;
     this.osnap = state.osnap;
     this.windowFrom = state.window;
+    this.snapMark = state.snapMarker ?? null;
     this.grips = state.grips;
     if (state.frameMs !== undefined && state.frameMs > 0) {
       const vis: string = (state.visible !== undefined && state.total !== undefined && state.visible < state.total)
@@ -449,6 +453,27 @@ struct Index {
     this.ovlCtx.lineTo(ux, uy - 14);
     this.ovlCtx.stroke();
     this.ovlCtx.lineWidth = 1;
+    // 捕捉标记
+    if (this.snapMark !== null && this.snapMark.length >= 2 && this.viewHeightW > 0) {
+      const scale: number = this.canvasW / this.viewHeightW;
+      const mx: number = (this.snapMark[0] - this.viewCenterX) * scale + this.canvasW / 2;
+      const my: number = this.canvasH / 2 - (this.snapMark[1] - this.viewCenterY) * scale;
+      this.ovlCtx.strokeStyle = 'rgba(0,255,255,0.9)';
+      this.ovlCtx.lineWidth = 2;
+      this.ovlCtx.strokeRect(mx - 5, my - 5, 10, 10);
+    }
+    // 缩放窗口虚线
+    if (this.zoomWinMode && this.zoomWinFirst !== null && this.viewHeightW > 0) {
+      const scale: number = this.canvasW / this.viewHeightW;
+      const fx: number = (this.zoomWinFirst[0] - this.viewCenterX) * scale + this.canvasW / 2;
+      const fy: number = this.canvasH / 2 - (this.zoomWinFirst[1] - this.viewCenterY) * scale;
+      this.ovlCtx.setLineDash([4, 3]);
+      this.ovlCtx.strokeStyle = 'rgba(255,255,255,0.5)';
+      this.ovlCtx.lineWidth = 1;
+      this.ovlCtx.strokeRect(Math.min(fx, this.crossX), Math.min(fy, this.crossY),
+        Math.abs(this.crossX - fx), Math.abs(this.crossY - fy));
+      this.ovlCtx.setLineDash([]);
+    }
     if (this.crossX < 0 || this.crossY < 0) {
       return;
     }
@@ -510,6 +535,24 @@ struct Index {
         this.middle.lastX = p[0];
         this.middle.lastY = p[1];
       } else if (event.button === MouseButton.Left) {
+        if (this.zoomWinMode) {
+          const scale: number = this.canvasW / this.viewHeightW;
+          const wx: number = this.viewCenterX + (event.x - this.canvasW / 2) / scale;
+          const wy: number = this.viewCenterY - (event.y - this.canvasH / 2) / scale;
+          if (this.zoomWinFirst === null) {
+            this.zoomWinFirst = [wx, wy];
+          } else {
+            const p: Record<string, number> = {
+              'x1': this.zoomWinFirst[0], 'y1': this.zoomWinFirst[1],
+              'x2': wx, 'y2': wy
+            };
+            this.applyState(Cad.execute('zoom_window', p));
+            this.zoomWinMode = false;
+            this.zoomWinFirst = null;
+          }
+          this.dirty = true;
+          return;
+        }
         if (this.pendingPlace !== '') {
           // 对话框确认后：这次点击是放置点（世界坐标）。
           const scale: number = this.canvasW / this.viewHeightW;
@@ -1425,6 +1468,14 @@ struct Index {
                     'name': 'OSMODE', 'value': this.osnap ? 0 : 4133
                   };
                   this.applyState(Cad.execute('setvar', p));
+                })
+              Button('缩放窗')
+                .fontSize(10).height(22).padding({ left: 5, right: 5 })
+                .backgroundColor(this.zoomWinMode ? ACCENT : PANEL)
+                .fontColor(this.zoomWinMode ? '#0b1a20' : DIM)
+                .onClick(() => {
+                  this.zoomWinMode = !this.zoomWinMode;
+                  this.zoomWinFirst = null;
                 })
               Button(this.gridOn ? '栅格 ✓' : '栅格')
                 .fontSize(10).height(22).padding({ left: 6, right: 6 })

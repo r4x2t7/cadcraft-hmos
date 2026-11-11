@@ -105,6 +105,7 @@ unsafe extern "C" fn init(env: ffi::Env, exports: ffi::Value) -> ffi::Value {
         ("cadState", Some(cad_state)),
         ("cadDocSwitch", Some(cad_doc_switch)),
         ("cadGripEdit", Some(cad_grip_edit)),
+        ("cadZoomWindow", Some(cad_zoom_window)),
         ("cadFrameInto", Some(cad_frame)),
     ];
     let props: Vec<(std::ffi::CString, ffi::PropertyDescriptor)> =
@@ -311,6 +312,17 @@ unsafe extern "C" fn cad_grip_edit(env: ffi::Env, info: ffi::CallbackInfo) -> ff
             js_result(env, with_app(|app| app.grip_edit(&grips)))
         }
         None => ffi::js_error(env, "cadGripEdit(arrayBuffer of u64 pairs)"),
+    }
+}
+
+unsafe extern "C" fn cad_zoom_window(env: ffi::Env, info: ffi::CallbackInfo) -> ffi::Value {
+    let a = ffi::args(env, info);
+    let num = |i: usize| a.get(i).copied().and_then(|v| ffi::arg_f64(env, v));
+    match (num(0), num(1), num(2), num(3)) {
+        (Some(x1), Some(y1), Some(x2), Some(y2)) => {
+            js_result(env, with_app(|app| app.zoom_window(x1, y1, x2, y2)))
+        }
+        _ => ffi::js_error(env, "cadZoomWindow(x1, y1, x2, y2)"),
     }
 }
 

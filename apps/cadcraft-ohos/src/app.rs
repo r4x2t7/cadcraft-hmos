@@ -124,6 +124,22 @@ impl App {
         self.state_json()
     }
 
+    /// Zoom to a window (two corner points in device px).
+    pub fn zoom_window(&mut self, x1: f64, y1: f64, x2: f64, y2: f64) -> Result<String, String> {
+        let w1 = self.to_world(x1, y1);
+        let w2 = self.to_world(x2, y2);
+        let center = Vec2::new((w1.x + w2.x) / 2.0, (w1.y + w2.y) / 2.0);
+        let h = (w2.y - w1.y).abs().max(1e-9);
+        let aspect = f64::from(self.width) / f64::from(self.height).max(1.0);
+        let height = h.max(h * aspect / (h / h)).max(1e-9);
+        // Use the larger dimension for the view height to fit the window.
+        let hh = h.max((w2.x - w1.x).abs() / aspect.max(0.01)).max(1e-9) * 1.05;
+        if let Ok(st) = self.session.state_mut() {
+            st.set_view_quiet(cadcraft_engine::View { center, height: hh });
+        }
+        self.state_json()
+    }
+
     /// Switch the active document tab (the engine exposes `docs`/`active` directly).
     pub fn doc_switch(&mut self, index: usize) -> Result<String, String> {
         if index < self.session.docs.len() {

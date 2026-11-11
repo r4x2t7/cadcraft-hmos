@@ -77,6 +77,7 @@ export interface CadState {
   ortho: boolean;
   osnap: boolean;
   window: number[] | null;
+  snapMarker: number[] | null;
   grips: CadGrip[];
   result?: object;
   log: string[];
@@ -94,7 +95,7 @@ function parse(json: string): CadState {
       ok: false, error: `${e}`, epoch: 0, prompting: false, prompt: null,
       view: EMPTY_VIEW, canvas: EMPTY_CANVAS, log: [], layers: [], currentLayer: '',
       selection: [], grips: [], space: '', layouts: [], docs: [], doc: 0,
-      ortho: false, osnap: false, window: null
+      ortho: false, osnap: false, window: null, snapMarker: null
     };
   }
   if (!state.view) {
@@ -117,6 +118,9 @@ function parse(json: string): CadState {
   }
   if (!state.currentLayer) {
     state.currentLayer = '';
+  }
+  if (!state.snapMarker) {
+    state.snapMarker = null;
   }
   if (!state.layouts) {
     state.layouts = [];

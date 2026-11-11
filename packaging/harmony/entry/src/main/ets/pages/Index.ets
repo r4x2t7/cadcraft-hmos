@@ -47,23 +47,6 @@ interface ToolDef {
   icon: Resource;
 }
 
-const DRAW_TOOLS: ToolDef[] = [
-  { id: 'line', label: 'LINE', desc: '画直线：指定两点', icon: $r('app.media.icon_line') },
-  { id: 'circle', label: 'CIRCLE', desc: '画圆：指定圆心和半径', icon: $r('app.media.icon_circle') },
-  { id: 'arc', label: 'ARC', desc: '画弧：起点、弧上一点、端点', icon: $r('app.media.icon_arc') },
-  { id: 'mtext', label: 'MTEXT', desc: '多行文字：输入后点画布放置', icon: $r('app.media.icon_mtext') },
-  { id: 'dimlinear', label: 'DIM', desc: '线性标注：标注两点间距离', icon: $r('app.media.icon_dimlinear') },
-  { id: 'hatch', label: 'HATCH', desc: '填充：选图案后点封闭区域内部', icon: $r('app.media.icon_hatch') },
-];
-
-const EDIT_TOOLS: ToolDef[] = [
-  { id: 'erase', label: 'ERASE', desc: '删除：选择对象后删除', icon: $r('app.media.icon_erase') },
-  { id: 'move', label: 'MOVE', desc: '移动：选择对象，指定位移', icon: $r('app.media.icon_move') },
-  { id: 'copy', label: 'COPY', desc: '复制：选择对象，复制到位', icon: $r('app.media.icon_copy') },
-  { id: 'offset', label: 'OFFSET', desc: '偏移：按距离作出平行对象', icon: $r('app.media.icon_offset') },
-  { id: 'trim', label: 'TRIM', desc: '修剪：选边界后裁掉多余部分', icon: $r('app.media.icon_trim') },
-];
-
 const TOP_ICONS: ToolDef[] = [
   { id: 'open', label: '打开', desc: '打开 DXF 图纸', icon: $r('app.media.icon_open') },
   { id: 'save', label: '保存', desc: '保存当前图为 DXF', icon: $r('app.media.icon_save') },
@@ -72,6 +55,49 @@ const TOP_ICONS: ToolDef[] = [
   { id: 'redo', label: 'REDO', desc: '重做', icon: $r('app.media.icon_redo') },
   { id: 'zoomextents', label: '缩放范围', desc: '缩放到图纸全范围', icon: $r('app.media.icon_zoomextents') },
 ];
+
+interface ToolGroup {
+  name: string;
+  large: ToolDef[];
+  small: ToolDef[];
+}
+
+const TOOL_GROUPS: ToolGroup[] = [
+  {
+    name: '绘图', large: [
+      { id: 'line', label: 'LINE', desc: '画直线', icon: $r('app.media.icon_line') },
+      { id: 'circle', label: 'CIRCLE', desc: '画圆', icon: $r('app.media.icon_circle') },
+    ], small: [
+      { id: 'arc', label: 'ARC', desc: '画弧', icon: $r('app.media.icon_arc') },
+    ],
+  },
+  {
+    name: '填充', large: [
+      { id: 'hatch', label: 'HATCH', desc: '填充', icon: $r('app.media.icon_hatch') },
+    ], small: [],
+  },
+  {
+    name: '修改', large: [
+      { id: 'move', label: 'MOVE', desc: '移动', icon: $r('app.media.icon_move') },
+    ], small: [
+      { id: 'erase', label: 'ERASE', desc: '删除', icon: $r('app.media.icon_erase') },
+      { id: 'copy', label: 'COPY', desc: '复制', icon: $r('app.media.icon_copy') },
+      { id: 'offset', label: 'OFFSET', desc: '偏移', icon: $r('app.media.icon_offset') },
+      { id: 'trim', label: 'TRIM', desc: '修剪', icon: $r('app.media.icon_trim') },
+    ],
+  },
+  {
+    name: '标注', large: [
+      { id: 'dimlinear', label: 'DIM', desc: '线性标注', icon: $r('app.media.icon_dimlinear') },
+    ], small: [],
+  },
+  {
+    name: '文字', large: [
+      { id: 'mtext', label: 'MTEXT', desc: '多行文字', icon: $r('app.media.icon_mtext') },
+    ], small: [],
+  },
+];
+
 
 @Entry
 @Component
@@ -110,6 +136,7 @@ struct Index {
   @State newLayerName: string = '';
   @State ctxLayer: string = '';
   @State ctxOpen: boolean = false;
+  @State collapsedGroups: string[] = [];
   @State geomValue: string = '';
   @State hatchOpen: boolean = false;
   @State hatchPattern: string = 'ANSI31';
@@ -897,38 +924,101 @@ struct Index {
   @Builder
   toolColumn() {
     Scroll() {
-      Column({ space: 4 }) {
-        Text('绘图').fontSize(11).fontColor(ACCENT).margin({ top: 8 })
-        Grid() {
-          ForEach(DRAW_TOOLS, (t: ToolDef) => {
-            GridItem() {
-              this.toolIcon(t)
+      Column({ space: 0 }) {
+        ForEach(TOOL_GROUPS, (group: ToolGroup) => {
+          // Group header (click to collapse/expand)
+          Row({ space: 6 }) {
+            Text('▾')
+              .fontSize(10)
+              .fontColor(DIM)
+              .width(14)
+            Text(group.name)
+              .fontSize(12)
+              .fontColor(TEXT)
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .height(24)
+          .padding({ left: 8 })
+          .backgroundColor(PANEL)
+          .onClick(() => {
+            // Toggle collapse (simple: hide/show the group body)
+            const idx = this.collapsedGroups.indexOf(group.name);
+            if (idx >= 0) {
+              this.collapsedGroups.splice(idx, 1);
+            } else {
+              this.collapsedGroups.push(group.name);
             }
-          }, (t: ToolDef) => t.id)
-        }
-        .columnsTemplate('1fr 1fr')
-        .rowsGap(2)
-        .columnsGap(2)
-        .width('100%')
-        Text('修改').fontSize(11).fontColor(ACCENT).margin({ top: 8 })
-        Grid() {
-          ForEach(EDIT_TOOLS, (t: ToolDef) => {
-            GridItem() {
-              this.toolIcon(t)
+          })
+
+          if (!this.collapsedGroups.includes(group.name)) {
+            // Large icons row
+            Row({ space: 4 }) {
+              ForEach(group.large, (t: ToolDef) => {
+                Column({ space: 1 }) {
+                  Image(t.icon)
+                    .width(24)
+                    .height(24)
+                    .objectFit(ImageFit.Contain)
+                  Text(t.label)
+                    .fontSize(7)
+                    .fontColor(DIM)
+                    .maxLines(1)
+                    .textAlign(TextAlign.Center)
+                    .width('100%')
+                }
+                .width(44)
+                .padding({ top: 4, bottom: 4 })
+                .borderRadius(4)
+                .onClick(() => this.runTool(t.id))
+                .gesture(LongPressGesture({ duration: 400, repeat: false })
+                  .onAction(() => this.showTip(t.desc)))
+              }, (t: ToolDef) => t.id)
             }
-          }, (t: ToolDef) => t.id)
-        }
-        .columnsTemplate('1fr 1fr')
-        .rowsGap(2)
-        .columnsGap(2)
-        .width('100%')
+            .width('100%')
+            .padding({ left: 4, right: 4 })
+            .justifyContent(FlexAlign.Start)
+
+            // Small icons row (denser)
+            if (group.small.length > 0) {
+              Row({ space: 2 }) {
+                ForEach(group.small, (t: ToolDef) => {
+                  Column({ space: 0 }) {
+                    Image(t.icon)
+                      .width(18)
+                      .height(18)
+                      .objectFit(ImageFit.Contain)
+                  }
+                  .width(28)
+                  .height(28)
+                  .borderRadius(3)
+                  .onClick(() => this.runTool(t.id))
+                  .gesture(LongPressGesture({ duration: 400, repeat: false })
+                    .onAction(() => this.showTip(t.desc)))
+                }, (t: ToolDef) => t.id)
+              }
+              .width('100%')
+              .padding({ left: 6, right: 6 })
+              .justifyContent(FlexAlign.Start)
+            }
+          }
+        }, (group: ToolGroup) => group.name)
       }
       .width('100%')
-      .padding({ bottom: 8 })
-      .alignItems(HorizontalAlign.Center)
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Auto)
+  }
+
+  runTool(id: string): void {
+    this.markActive();
+    if (id === 'hatch') {
+      this.hatchOpen = true;
+    } else if (id === 'mtext') {
+      this.mtextOpen = true;
+    } else {
+      this.startCommand(id);
+    }
   }
 
   /** 右侧图层列表：行点击 = 置为当前层；行 ⋯ = 动作面板（CRUD）。 */

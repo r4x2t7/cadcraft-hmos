@@ -195,6 +195,12 @@ struct Index {
   private canvasW: number = 0; // vp
   private canvasH: number = 0; // vp
   private middle: MiddleDrag = new MiddleDrag();
+  private frameSeq: number = 0;
+  private lastVisible: number = -1;
+  private lastTotal: number = -1;
+  private lastViewH: number = 0;
+  private lastViewCX: number = 0;
+  private lastViewCY: number = 0;
   private ctrlHeld: boolean = false;
   private dirty: boolean = true;
   private frames: number = 0;
@@ -317,6 +323,11 @@ struct Index {
     const view: CadView = state.view;
     this.viewCenterX = view.center[0];
     this.viewCenterY = view.center[1];
+    this.lastVisible = state.visible ?? -1;
+    this.lastTotal = state.total ?? -1;
+    this.lastViewH = view.height;
+    this.lastViewCX = view.center[0];
+    this.lastViewCY = view.center[1];
     this.viewHeightW = view.height;
     this.status = `视图高 ${view.height.toFixed(2)} | ${this.frameMs}`;
     this.drawCrosshair();
@@ -355,6 +366,7 @@ struct Index {
       this.frameBuf = new ArrayBuffer(w * h * 4);
     }
     const n: number = Cad.frameInto(this.frameBuf);
+    this.frameSeq++;
     if (n === 0) {
       hilog.warn(0x0000, 'cadcraft', 'Cad.frameInto empty at %{public}dx%{public}d', w, h);
       this.dirty = this.frames < 600; // retry: first frames race the async DXF load
@@ -373,23 +385,21 @@ struct Index {
         px[i] = px[i + 2];
         px[i + 2] = r;
       }
-      if (this.pixelMap === null || this.pixelMap.getImageInfoSync().size.width !== w
-        || this.pixelMap.getImageInfoSync().size.height !== h) {
-        if (this.pixelMap !== null) {
-          await this.pixelMap.release();
-        }
-        const size: image.Size = { width: w, height: h };
-        const opts: image.InitializationOptions = {
-          size: size,
-          srcPixelFormat: image.PixelMapFormat.BGRA_8888
-        };
-        this.pixelMap = await image.createPixelMap(this.frameBuf.slice(0, n), opts);
-        this.pmVersion += 1;
-      } else {
-        const region: image.Region = { size: { width: w, height: h }, x: 0, y: 0 };
-        const area: image.PositionArea = { pixels: this.frameBuf.slice(0, n), offset: 0, stride: w * 4, region: region };
-        await this.pixelMap.writePixels(area);
+      // Re-create the pixel map per DIRTY frame: in-place writePixels never reaches the
+      // display on this SDK build (the Image keeps its first decoded frame), and the
+      // double-buffer reference flip does not either. Only interactive frames land here
+      // (drawFrame runs on dirty), so the churn is bounded by interaction rate; the
+      // ArrayBuffer itself is reused via cadFrameInto, so no per-frame buffer allocation.
+      if (this.pixelMap !== null) {
+        await this.pixelMap.release();
       }
+      const size: image.Size = { width: w, height: h };
+      const opts: image.InitializationOptions = {
+        size: size,
+        srcPixelFormat: image.PixelMapFormat.BGRA_8888
+      };
+      this.pixelMap = await image.createPixelMap(this.frameBuf.slice(0, n), opts);
+      this.pmVersion += 1;
     } catch (e) {
       hilog.error(0x0000, 'cadcraft', 'drawFrame catch: %{public}s', `${e}`);
       this.showToast(`渲染: ${e}`);
@@ -456,7 +466,9 @@ struct Index {
     // 选择窗口：引擎 pending_window 起点到光标的虚线框。
     if (this.windowFrom !== null && this.windowFrom.length === 2 && this.viewHeightW > 0
       && this.crossX >= 0) {
-      const scale: number = this.canvasW / this.viewHeightW;
+      // px-per-world-unit derives from the canvas HEIGHT (the view height is a world-space
+      // height); a width-based scale draws the selection window at the wrong position.
+      const scale: number = this.canvasH / this.viewHeightW;
       const fx: number = (this.windowFrom[0] - this.viewCenterX) * scale + this.canvasW / 2;
       const fy: number = this.canvasH / 2 - (this.windowFrom[1] - this.viewCenterY) * scale;
       this.ovlCtx.setLineDash([6, 4]);
@@ -519,12 +531,15 @@ struct Index {
     return [xVp * this.dpr, yVp * this.dpr];
   }
 
-  /** World coordinates of a canvas vp point, for the status bar readout. */
+  /** World coordinates of a canvas vp point, for the status bar readout.
+   *  The view height spans the canvas HEIGHT in world units, so the px-per-unit
+   *  scale divides the canvas HEIGHT by it (a width-based scale is the aspect
+   *  ratio off — the same defect app.rs' scale() had). */
   worldText(xVp: number, yVp: number): string {
-    if (!(this.viewHeightW > 0) || this.canvasW <= 0) {
+    if (!(this.viewHeightW > 0) || this.canvasW <= 0 || this.canvasH <= 0) {
       return '';
     }
-    const scale: number = this.canvasW / this.viewHeightW;
+    const scale: number = this.canvasH / this.viewHeightW;
     const wx: number = this.viewCenterX + (xVp - this.canvasW / 2) / scale;
     const wy: number = this.viewCenterY - (yVp - this.canvasH / 2) / scale;
     return `${wx.toFixed(2)}, ${wy.toFixed(2)}`;
@@ -616,8 +631,19 @@ struct Index {
             return;
           }
         }
-        this.applyState(Cad.click(p[0], p[1], false, this.ctrlHeld));
+        const st: CadState = Cad.click(p[0], p[1], false, this.ctrlHeld);
+        hilog.info(0x0000, 'cadcraft',
+          'click vp(%{public}d,%{public}d) dev(%{public}d,%{public}d) view c(%{public}f,%{public}f) h%{public}f canvas %{public}dx%{public}d vis %{public}d/%{public}d',
+          Math.round(event.x), Math.round(event.y), Math.round(p[0]), Math.round(p[1]),
+          st.view.center[0], st.view.center[1], st.view.height, st.canvas.width, st.canvas.height,
+          st.visible ?? -1, st.total ?? -1);
+        this.applyState(st);
         this.dirty = true;
+        // 命令行始终聚焦（桌面行为）：画布点击后立即回到命令行。
+        // 夹点编辑除外：Space 翻转模式走画布键盘，保持画布聚焦。
+        if (this.hotGrip === null) {
+          this.refocusCmd();
+        }
       }
       return;
     }
@@ -635,6 +661,9 @@ struct Index {
       if (event.touches.length < 2) {
         this.applyState(Cad.click(p[0], p[1], false, false));
         this.dirty = true;
+        if (this.hotGrip === null) {
+          this.refocusCmd();
+        }
       }
       this.middle.down = false;
     } else if (event.type === TouchType.Move && event.touches.length === 2) {
@@ -829,11 +858,19 @@ struct Index {
   keyword(kw: string): void {
     this.applyState(Cad.cmdline(kw));
     this.dirty = true;
+    focusControl.requestFocus('cmdInput');
+  }
+
+  /** 回焦命令行（桌面行为）：键盘永远是命令行优先，Esc/Enter/命令都从这里进。 */
+  refocusCmd(): void {
+    focusControl.requestFocus('cmdInput');
   }
 
   startCommand(name: string): void {
     this.applyState(Cad.start(name));
+    this.showToast(`命令 ${name.toUpperCase()} 已启动 — 在画布上操作`);
     this.dirty = true;
+    this.refocusCmd();
   }
 
   runMenu(id: string): void {
@@ -1462,6 +1499,15 @@ struct Index {
                   }
                 })
                 .onSubmit(() => this.submitCmd())
+                .onKeyEvent((event: KeyEvent) => {
+                  // Esc at the command line cancels like it does on the canvas: the input
+                  // keeps focus after every canvas click, so this is the usual path.
+                  if (event.type === KeyType.Down && event.keyCode === KeyCode.KEYCODE_ESCAPE) {
+                    this.applyState(Cad.cancel());
+                    this.hotGrip = null;
+                    this.dirty = true;
+                  }
+                })
             }
             .width('100%')
             .height(130)

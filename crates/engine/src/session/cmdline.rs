@@ -81,6 +81,11 @@ impl Session {
         if tt.is_empty() {
             return self.input(Input::Enter);
         }
+        // A CJK IME types coordinates with full-width punctuation (`2，5` / `1。5`): read such
+        // input at numeric prompts exactly like the ASCII form. Free-text prompts keep the
+        // original characters — this only feeds the keyword / point / distance parsers below.
+        let numeric = tt.replace('，', ",").replace(['。', '．'], ".");
+        let tt_num: &str = if numeric != tt { numeric.as_str() } else { tt };
         // FROM, M2P, point filters, `<a` (before `'`: `'_from` is a modifier).
         if let Some(r) = self.typed_modifier(&prompt, tt) {
             return r;
@@ -123,25 +128,25 @@ impl Session {
         // language (`_M`, `_Yes`): scripts and LISP routines write them that way. (Snap
         // overrides such as `_cen` were taken above.)
         if !selection_mode
-            && let Some(k) = prompt.match_keyword(tt).or_else(|| tt.strip_prefix('_').and_then(|r| prompt.match_keyword(r)))
-            && !(prompt.accept.number && tt.parse::<f64>().is_ok())
+            && let Some(k) = prompt.match_keyword(tt_num).or_else(|| tt_num.strip_prefix('_').and_then(|r| prompt.match_keyword(r)))
+            && !(prompt.accept.number && tt_num.parse::<f64>().is_ok())
         {
             return self.input(Input::Keyword(k));
         }
         if prompt.accept.point {
-            if let Some(p) = prompt::parse_point_with(tt, self.last_point, &self.angle_settings()) {
+            if let Some(p) = prompt::parse_point_with(tt_num, self.last_point, &self.angle_settings()) {
                 self.last_polar = prompt::parse_polar_text(tt, &self.angle_settings());
                 return self.input(Input::Point(p));
             }
             // Direct distance entry along the tracking path the cursor is on, from the point it
             // comes from (an acquired or temporary tracking point needs no base point).
-            if let Some(dist) = units::parse_distance(tt).filter(|_| !prompt.accept.number)
+            if let Some(dist) = units::parse_distance(tt_num).filter(|_| !prompt.accept.number)
                 && let Some((from, dir)) = self.tracking.last.as_ref().filter(|t| t.point.near(self.cursor, 1e-9)).and_then(|t| t.along())
             {
                 return self.input(Input::Point(from + dir * dist));
             }
             // Direct distance entry along the rubber band.
-            if let (Some(base), Some(dist)) = (prompt.base, units::parse_distance(tt))
+            if let (Some(base), Some(dist)) = (prompt.base, units::parse_distance(tt_num))
                 && !prompt.accept.number
             {
                 let mut c = self.cursor;
@@ -153,7 +158,11 @@ impl Session {
                 return self.input(Input::Point(base + dir * dist));
             }
         }
-        self.input(Input::Text(tt.to_string()))
+        // Commands that parse the number themselves (POINT_OR_NUMBER prompts) receive the
+        // text as-is: hand them the normalized form too, so a CJK IME's `1。5` reads as 1.5.
+        // Free-text prompts still get the original characters.
+        let out = if (prompt.accept.number || prompt.accept.point) && !prompt.accept.text { tt_num } else { tt };
+        self.input(Input::Text(out.to_string()))
     }
 
     /// Run a script, as AutoCAD reads one: a space or a line end ends an input, and an empty

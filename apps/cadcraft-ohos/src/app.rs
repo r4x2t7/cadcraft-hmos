@@ -3,7 +3,7 @@
 //! View state lives in the engine itself (`DocState::view`), so pan/zoom are plain engine
 //! calls and the renderer reads back the same view the command line's `ZOOM`/`PAN` produce.
 
-use cadcraft_engine::geom::Vec2;
+use cadcraft_engine::geom::{Bounds2, Vec2};
 use cadcraft_engine::{Input, Session, View as EngineView};
 
 pub struct App {
@@ -47,10 +47,13 @@ impl App {
         self.session.viewport_px = (f64::from(self.width), f64::from(self.height));
     }
 
-    /// The pixels-per-world-unit of the current engine view at the current canvas width.
+    /// The pixels-per-world-unit of the current engine view. The session view's `height` is
+    /// the world units spanning the viewport HEIGHT, so the scale maps by canvas height —
+    /// the same way `render.rs` builds its raster view (a width-based scale doubles the
+    /// factor on a 16:9 canvas and every click lands far from the cursor).
     fn scale(&self) -> f64 {
         let view = self.engine_view();
-        f64::from(self.width) / view.height.max(1e-9)
+        f64::from(self.height) / view.height.max(1e-9)
     }
 
     fn engine_view(&self) -> EngineView {

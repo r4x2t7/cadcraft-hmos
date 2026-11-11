@@ -780,6 +780,7 @@ dependencies = [
 name = "cadcraft-ohos"
 version = "0.17.0"
 dependencies = [
+ "cadcraft-color",
  "cadcraft-doc",
  "cadcraft-engine",
  "cadcraft-io",

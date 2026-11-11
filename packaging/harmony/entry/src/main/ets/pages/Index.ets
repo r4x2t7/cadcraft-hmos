@@ -647,23 +647,14 @@ struct Index {
     }
   }
 
-  /** Dev benchmark: load the packed thunder.dxf (rawfile) at startup. Keep small. */
   private async loadBenchmarkDrawing(): Promise<void> {
+    // 文件关联打开（双击 .dxf）优先加载。
     const uri = AppStorage.get<string>('hocadOpenUri');
     AppStorage.setOrCreate('hocadOpenUri', '');
     if (uri && this.openUri(uri)) {
       return;
     }
-    try {
-      const raw: Uint8Array =
-        await getContext(this).resourceManager.getRawFileContent('thunder.dxf');
-      const buf: ArrayBuffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
-      this.applyState(Cad.openDxf('thunder.dxf', buf));
-      this.needFit = true; // real canvas size arrives after layout — fit then
-      this.dirty = true;
-    } catch (e) {
-      // No thunder.dxf packed in this build — start on the empty drawing.
-    }
+    // 空白图纸启动，和桌面版一致。不再自动加载基准图。
   }
 
   async saveDxf(): Promise<void> {

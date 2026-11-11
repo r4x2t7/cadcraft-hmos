@@ -19,6 +19,8 @@ pub struct App {
     pub last_raster_ms: f64,
     /// Entities that passed viewport culling (of `model.len()`), last frame.
     pub last_visible: usize,
+    /// Snap marker (world xy + label) from the last cursor move, for the shell to draw.
+    pub last_snap: Option<(f64, f64, &'static str)>,
 }
 
 impl App {
@@ -33,6 +35,7 @@ impl App {
             last_build_ms: 0.0,
             last_raster_ms: 0.0,
             last_visible: 0,
+            last_snap: None,
         }
     }
 
@@ -245,6 +248,9 @@ impl App {
             "ortho": ortho,
             "osnap": osnap,
             "window": window,
+            "snapMarker": self.last_snap.map(|(x, y, name)| {
+                serde_json::json!([x, y, name])
+            }),
             "grips": grips,
             "prompting": prompt.is_some(),
             "prompt": prompt,
@@ -282,10 +288,29 @@ impl App {
     pub fn click(&mut self, x: f64, y: f64, shift: bool, ctrl: bool) -> Result<String, String> {
         self.session.ctrl_down = ctrl;
         let w = self.to_world(x, y);
-        // During a prompt a click is a point input (or a pick, the prompt machine decides);
-        // otherwise it picks objects / starts a window selection, exactly like the desktop.
+        // Object snap: compute the nearest snap point for this click.
+        let px = self.session.pixel_size();
+        let aperture = 10.0 * px;
+        let prompt = self.session.current_prompt();
+        let q = cadcraft_engine::snap::tracking::CursorQuery {
+            base: prompt.as_ref().and_then(|pr| pr.base),
+            deferred: false,
+            corner: false,
+            aperture,
+            tol: px * 4.0,
+            shift: false,
+            now: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64()),
+        };
+        let snap = self.session.snap_cursor(w, &q);
+        // During a prompt: snapped input if available, else a plain point.
+        // Idle: snapped click or plain idle_click.
         if self.session.current_prompt().is_some() {
-            self.session.input(Input::Point(w)).map_err(|e| format!("{e}"))?;
+            match snap.snap {
+                Some(hit) => self.session.input_snapped(hit).map_err(|e| format!("{e}"))?,
+                None => self.session.input(Input::Point(w)).map_err(|e| format!("{e}"))?,
+            };
         } else {
             self.session.idle_click(w, shift).map_err(|e| format!("{e}"))?;
         }
@@ -293,7 +318,25 @@ impl App {
     }
 
     pub fn move_cursor(&mut self, x: f64, y: f64) {
-        self.session.cursor = self.to_world(x, y);
+        let w = self.to_world(x, y);
+        self.session.cursor = w;
+        // Object snap: compute the nearest snap point within the aperture.
+        let px = self.session.pixel_size();
+        let aperture = 10.0 * px;
+        let prompt = self.session.current_prompt();
+        let q = cadcraft_engine::snap::tracking::CursorQuery {
+            base: prompt.as_ref().and_then(|pr| pr.base),
+            deferred: false,
+            corner: false,
+            aperture,
+            tol: px * 4.0,
+            shift: false,
+            now: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64()),
+        };
+        let snap = self.session.snap_cursor(w, &q);
+        self.last_snap = snap.snap.as_ref().map(|h| (h.point.x, h.point.y, h.name));
     }
 
     pub fn zoom(&mut self, factor: f64, x: f64, y: f64) -> Result<String, String> {

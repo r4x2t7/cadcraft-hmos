@@ -66,7 +66,9 @@ const TOOL_GROUPS: ToolGroup[] = [
   {
     name: '绘图', large: [
       { id: 'line', label: 'LINE', desc: '画直线', icon: $r('app.media.icon_line') },
+      { id: 'polyline', label: 'PLINE', desc: '多段线', icon: $r('app.media.icon_line') },
       { id: 'circle', label: 'CIRCLE', desc: '画圆', icon: $r('app.media.icon_circle') },
+      { id: 'rectang', label: 'RECT', desc: '矩形', icon: $r('app.media.icon_hatch') },
     ], small: [
       { id: 'arc', label: 'ARC', desc: '画弧', icon: $r('app.media.icon_arc') },
     ],

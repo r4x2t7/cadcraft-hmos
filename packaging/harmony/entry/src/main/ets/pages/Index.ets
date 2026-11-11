@@ -44,7 +44,7 @@ interface ToolDef {
   id: string;
   label: string;
   desc: string;
-  icon: Resource;
+  icon?: Resource;
 }
 
 const TOP_ICONS: ToolDef[] = [
@@ -63,40 +63,68 @@ interface ToolGroup {
 }
 
 const TOOL_GROUPS: ToolGroup[] = [
-  {
-    name: '绘图', large: [
+  { name: '绘图', large: [
       { id: 'line', label: 'LINE', desc: '画直线', icon: $r('app.media.icon_line') },
-      { id: 'polyline', label: 'PLINE', desc: '多段线', icon: $r('app.media.icon_line') },
       { id: 'circle', label: 'CIRCLE', desc: '画圆', icon: $r('app.media.icon_circle') },
-      { id: 'rectang', label: 'RECT', desc: '矩形', icon: $r('app.media.icon_hatch') },
     ], small: [
+      { id: 'polyline', label: 'PLINE', desc: '多段线' },
+      { id: 'rectang', label: 'RECT', desc: '矩形' },
       { id: 'arc', label: 'ARC', desc: '画弧', icon: $r('app.media.icon_arc') },
+      { id: 'spline', label: 'SPLINE', desc: '样条曲线' },
+      { id: 'ellipse', label: 'ELLIPSE', desc: '椭圆' },
+      { id: 'polygon', label: 'POLYGON', desc: '多边形' },
+      { id: 'xline', label: 'XLINE', desc: '构造线' },
+      { id: 'ray', label: 'RAY', desc: '射线' },
+      { id: 'point.multiple', label: 'POINT', desc: '多点' },
+      { id: 'donut', label: 'DONUT', desc: '圆环' },
+      { id: 'revcloud', label: 'CLOUD', desc: '云线' },
     ],
   },
-  {
-    name: '填充', large: [
+  { name: '填充', large: [
       { id: 'hatch', label: 'HATCH', desc: '填充', icon: $r('app.media.icon_hatch') },
-    ], small: [],
+    ], small: [
+      { id: 'gradient', label: 'GRADIENT', desc: '渐变填充' },
+      { id: 'boundary', label: 'BOUNDARY', desc: '边界' },
+    ],
   },
-  {
-    name: '修改', large: [
+  { name: '修改', large: [
       { id: 'move', label: 'MOVE', desc: '移动', icon: $r('app.media.icon_move') },
     ], small: [
       { id: 'erase', label: 'ERASE', desc: '删除', icon: $r('app.media.icon_erase') },
       { id: 'copy', label: 'COPY', desc: '复制', icon: $r('app.media.icon_copy') },
+      { id: 'rotate', label: 'ROTATE', desc: '旋转' },
+      { id: 'scale', label: 'SCALE', desc: '缩放' },
+      { id: 'mirror', label: 'MIRROR', desc: '镜像' },
       { id: 'offset', label: 'OFFSET', desc: '偏移', icon: $r('app.media.icon_offset') },
       { id: 'trim', label: 'TRIM', desc: '修剪', icon: $r('app.media.icon_trim') },
+      { id: 'extend', label: 'EXTEND', desc: '延伸' },
+      { id: 'fillet', label: 'FILLET', desc: '圆角' },
+      { id: 'chamfer', label: 'CHAMFER', desc: '倒角' },
+      { id: 'arrayrect', label: 'ARRAY', desc: '矩形阵列' },
+      { id: 'arraypolar', label: 'ARRAYP', desc: '环形阵列' },
+      { id: 'stretch', label: 'STRETCH', desc: '拉伸' },
+      { id: 'explode', label: 'EXPLODE', desc: '分解' },
+      { id: 'break', label: 'BREAK', desc: '打断' },
+      { id: 'join', label: 'JOIN', desc: '合并' },
+      { id: 'lengthen', label: 'LENGTHEN', desc: '拉长' },
+      { id: 'matchprop', label: 'MATCHPROP', desc: '特性匹配' },
     ],
   },
-  {
-    name: '标注', large: [
+  { name: '标注', large: [
       { id: 'dimlinear', label: 'DIM', desc: '线性标注', icon: $r('app.media.icon_dimlinear') },
-    ], small: [],
+    ], small: [
+      { id: 'dimaligned', label: 'DIMALI', desc: '对齐标注' },
+      { id: 'dimradius', label: 'DIMRAD', desc: '半径标注' },
+      { id: 'dimdiameter', label: 'DIMDIA', desc: '直径标注' },
+      { id: 'dimangular', label: 'DIMANG', desc: '角度标注' },
+      { id: 'qdim', label: 'QDIM', desc: '快速标注' },
+    ],
   },
-  {
-    name: '文字', large: [
+  { name: '文字', large: [
       { id: 'mtext', label: 'MTEXT', desc: '多行文字', icon: $r('app.media.icon_mtext') },
-    ], small: [],
+    ], small: [
+      { id: 'text', label: 'TEXT', desc: '单行文字' },
+    ],
   },
 ];
 
@@ -1001,10 +1029,18 @@ struct Index {
             Row({ space: 4 }) {
               ForEach(group.large, (t: ToolDef) => {
                 Column({ space: 1 }) {
-                  Image(t.icon)
-                    .width(24)
-                    .height(24)
-                    .objectFit(ImageFit.Contain)
+                  if (t.icon) {
+                    Image(t.icon)
+                      .width(24)
+                      .height(24)
+                      .objectFit(ImageFit.Contain)
+                  } else {
+                    Text(t.label.substring(0, 2))
+                      .fontSize(14)
+                      .fontColor(ACCENT)
+                      .height(24)
+                      .textAlign(TextAlign.Center)
+                  }
                   Text(t.label)
                     .fontSize(7)
                     .fontColor(DIM)
@@ -1026,25 +1062,22 @@ struct Index {
 
             // Small icons row (denser)
             if (group.small.length > 0) {
-              Row({ space: 2 }) {
+              Flex({ wrap: FlexWrap.Wrap }) {
                 ForEach(group.small, (t: ToolDef) => {
-                  Column({ space: 0 }) {
-                    Image(t.icon)
-                      .width(18)
-                      .height(18)
-                      .objectFit(ImageFit.Contain)
-                  }
-                  .width(28)
-                  .height(28)
-                  .borderRadius(3)
-                  .onClick(() => this.runTool(t.id))
-                  .gesture(LongPressGesture({ duration: 400, repeat: false })
-                    .onAction(() => this.showTip(t.desc)))
+                  Text(t.label)
+                    .fontSize(9)
+                    .fontColor(TEXT)
+                    .padding({ left: 5, right: 5, top: 3, bottom: 3 })
+                    .borderRadius(3)
+                    .backgroundColor(PANEL)
+                    .margin(1)
+                    .onClick(() => this.runTool(t.id))
+                    .gesture(LongPressGesture({ duration: 400, repeat: false })
+                      .onAction(() => this.showTip(t.desc)))
                 }, (t: ToolDef) => t.id)
               }
               .width('100%')
               .padding({ left: 6, right: 6 })
-              .justifyContent(FlexAlign.Start)
             }
           }
         }, (group: ToolGroup) => group.name)

@@ -385,6 +385,8 @@ struct Index {
       this.frameBuf = new ArrayBuffer(w * h * 4);
     }
     const n: number = Cad.frameInto(this.frameBuf);
+    // 打印路径的画布快照：引用复用缓冲（打印时再切片），每帧零拷贝。
+    this.lastBuf = this.frameBuf;
     this.frameSeq++;
     if (n === 0) {
       hilog.warn(0x0000, 'cadcraft', 'Cad.frameInto empty at %{public}dx%{public}d', w, h);

@@ -78,6 +78,10 @@ const TOOL_GROUPS: ToolGroup[] = [
       { id: 'point.multiple', label: 'POINT', desc: '多点' },
       { id: 'donut', label: 'DONUT', desc: '圆环' },
       { id: 'revcloud', label: 'CLOUD', desc: '云线' },
+      { id: 'wipeout', label: 'WIPEOUT', desc: '区域覆盖' },
+      { id: 'centermark', label: 'CENTMARK', desc: '圆心标记' },
+      { id: 'centerline', label: 'CENTLINE', desc: '中心线' },
+      { id: 'region', label: 'REGION', desc: '面域' },
     ],
   },
   { name: '填充', large: [
@@ -478,6 +482,27 @@ struct Index {
         Math.abs(this.crossX - fx), Math.abs(this.crossY - fy));
       this.ovlCtx.setLineDash([]);
     }
+    // 夹点：桌面同款蓝色方块，热夹点实心红；命中半径与 gripAt 的 12vp 一致。
+    if (this.grips.length > 0 && this.viewHeightW > 0 && this.canvasH > 0) {
+      const gs: number = this.canvasH / this.viewHeightW;
+      const half: number = 5;
+      for (const g of this.grips) {
+        const gx: number = (g.x - this.viewCenterX) * gs + this.canvasW / 2;
+        const gy: number = this.canvasH / 2 - (g.y - this.viewCenterY) * gs;
+        if (gx < -half || gy < -half || gx > this.canvasW + half || gy > this.canvasH + half) {
+          continue;
+        }
+        const hot: boolean = this.hotGrip !== null && this.hotGrip.handle === g.handle && this.hotGrip.index === g.index;
+        this.ovlCtx.fillStyle = hot ? '#e05b5b' : '#3f8fd2';
+        this.ovlCtx.strokeStyle = '#10141a';
+        this.ovlCtx.lineWidth = 1;
+        this.ovlCtx.beginPath();
+        this.ovlCtx.rect(gx - half, gy - half, half * 2, half * 2);
+        this.ovlCtx.fill();
+        this.ovlCtx.stroke();
+      }
+      this.ovlCtx.setLineDash([]);
+    }
     // UCS 图标（右下角）：红 X / 绿 Y，桌面同款方位提示。
     const ux: number = this.canvasW - 30;
     const uy: number = this.canvasH - 16;
@@ -579,7 +604,7 @@ struct Index {
         this.middle.lastY = p[1];
       } else if (event.button === MouseButton.Left) {
         if (this.zoomWinMode) {
-          const scale: number = this.canvasW / this.viewHeightW;
+          const scale: number = this.canvasH / this.viewHeightW;
           const wx: number = this.viewCenterX + (event.x - this.canvasW / 2) / scale;
           const wy: number = this.viewCenterY - (event.y - this.canvasH / 2) / scale;
           if (this.zoomWinFirst === null) {
@@ -659,6 +684,17 @@ struct Index {
       const t: TouchObject = event.changedTouches[0];
       const p: number[] = this.device(t.x, t.y);
       if (event.touches.length < 2) {
+        // 与鼠标路径一致：空闲时点击命中夹点 → 交互 GRIP，点击确认目标点。
+        if (this.hotGrip === null) {
+          const g: CadGrip | null = this.gripAt(t.x, t.y);
+          if (g !== null) {
+            this.hotGrip = g;
+            this.applyState(Cad.gripEdit([[g.handle, g.index]]));
+            this.markActive();
+            this.dirty = true;
+            return;
+          }
+        }
         this.applyState(Cad.click(p[0], p[1], false, false));
         this.dirty = true;
         if (this.hotGrip === null) {
@@ -728,7 +764,9 @@ struct Index {
     let best: CadGrip | null = null;
     let bestD: number = 12;
     for (const g of this.grips) {
-      const scale: number = this.canvasW / this.viewHeightW;
+      // px-per-world-unit derives from the canvas HEIGHT (view height is a world height) —
+      // the width-based scale put grip hit-tests 1.9x off like the rest of that bug class.
+      const scale: number = this.canvasH / this.viewHeightW;
       const gx: number = (g.x - this.viewCenterX) * scale + this.canvasW / 2;
       const gy: number = this.canvasH / 2 - (g.y - this.viewCenterY) * scale;
       const d: number = Math.hypot(gx - xVp, gy - yVp);

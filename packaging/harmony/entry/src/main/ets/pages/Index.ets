@@ -174,6 +174,15 @@ struct Index {
   @State collapsedGroups: string[] = [];
   @State geomValue: string = '';
   @State hatchOpen: boolean = false;
+  @State dimStyleOpen: boolean = false;
+  @State dimTxt: string = '2.5';
+  @State dimAsz: string = '1.5';
+  @State dimExo: string = '0.625';
+  @State dimExe: string = '1.25';
+  @State dimGap: string = '0.7';
+  @State textStyleOpen: boolean = false;
+  @State textHeightV: string = '0';
+  @State textWidthF: string = '1';
   @State hatchPattern: string = 'ANSI31';
   @State hatchScale: string = '1';
   @State hatchAngle: string = '0';
@@ -1052,8 +1061,68 @@ struct Index {
     this.refocusCmd();
   }
 
+  /** 标注样式面板：读当前样式的 DIMVAR，填入字段。 */
+  openDimStylePanel(): void {
+    const listed: CadState = Cad.execute('dimstyle.list', null);
+    const res: Record<string, Object> | undefined = listed.result as Record<string, Object> | undefined;
+    const current: string = res ? String(res['current'] ?? 'Standard') : 'Standard';
+    const named: CadState = Cad.execute('dimstyle.list', { 'name': current });
+    const vars: Record<string, Object> | undefined = (named.result as Record<string, Object> | undefined)?.['variables'] as Record<string, Object> | undefined;
+    const num = (k: string, d: number): string => {
+      const v = vars ? vars[k] : undefined;
+      return v === undefined || v === null ? String(d) : String(v);
+    };
+    this.dimTxt = num('DIMTXT', 2.5);
+    this.dimAsz = num('DIMASZ', 1.5);
+    this.dimExo = num('DIMEXO', 0.625);
+    this.dimExe = num('DIMEXE', 1.25);
+    this.dimGap = num('DIMGAP', 0.7);
+    this.dimStyleOpen = true;
+  }
+
+  applyDimStyle(): void {
+    this.applyState(Cad.execute('dimstyle', {
+      'name': 'Standard', 'current': true,
+      'DIMTXT': Number(this.dimTxt) || 2.5, 'DIMASZ': Number(this.dimAsz) || 1.5,
+      'DIMEXO': Number(this.dimExo) || 0.625, 'DIMEXE': Number(this.dimExe) || 1.25,
+      'DIMGAP': Number(this.dimGap) || 0.7
+    }));
+    this.dimStyleOpen = false;
+    this.dirty = true;
+  }
+
+  /** 文字样式面板：读当前样式的字高与宽度因子。 */
+  openTextStylePanel(): void {
+    const listed: CadState = Cad.execute('style.list', null);
+    const res: Record<string, Object> | undefined = listed.result as Record<string, Object> | undefined;
+    const current: string = res ? String(res['current'] ?? 'Standard') : 'Standard';
+    const styles: Array<Record<string, Object>> | undefined = res?.['styles'] as Array<Record<string, Object>> | undefined;
+    const cur: Record<string, Object> | undefined = styles?.find((st: Record<string, Object>): boolean => String(st['name'] ?? '') === current);
+    this.textHeightV = String(cur?.['height'] ?? 0);
+    this.textWidthF = String(cur?.['widthFactor'] ?? 1);
+    this.textStyleOpen = true;
+  }
+
+  applyTextStyle(): void {
+    this.applyState(Cad.execute('style', {
+      'name': 'Standard', 'current': true,
+      'height': Number(this.textHeightV) || 0, 'widthFactor': Number(this.textWidthF) || 1
+    }));
+    this.textStyleOpen = false;
+    this.dirty = true;
+  }
+
   runMenu(id: string): void {
     this.openMenu = -1;
+    // 样式管理是 JSON 命令（无交互流）：菜单项打开面板而不是报 "name is required"。
+    if (id === 'dimstyle.dimension') {
+      this.openDimStylePanel();
+      return;
+    }
+    if (id === 'style') {
+      this.openTextStylePanel();
+      return;
+    }
     // 菜单命令统一从命令行走：引擎解析别名并按需启动交互提示，与桌面一致。
     this.applyState(Cad.cmdline(id));
     this.dirty = true;
@@ -1125,7 +1194,9 @@ struct Index {
           .backgroundColor(this.openMenu === idx ? PANEL_HI : Color.Transparent)
           .fontColor(TEXT)
           .onClick((e: ClickEvent) => {
-            this.menuX = Math.max(4, e.x - 10);
+            // 下拉在根 Column 上绝对定位：x 必须是窗口相对坐标（e.x 是按钮内相对坐标，
+            // 用它会把 Dimension 的下拉画到窗口最左边去）。
+            this.menuX = Math.max(4, e.windowX - 10);
             this.openMenu = this.openMenu === idx ? -1 : idx;
           })
       }, (m: CadMenu) => m.title)
@@ -1777,23 +1848,30 @@ struct Index {
         }
         if (this.openMenu >= 0 && this.openMenu < this.menus.length) {
           Column({ space: 1 }) {
-            ForEach(this.menus[this.openMenu].items, (it: CadMenuItem) => {
-              Row({ space: 6 }) {
-                Text(it.label)
-                  .fontSize(12)
-                  .fontColor(TEXT)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .layoutWeight(1)
-                if (it.key) {
-                  Text(it.key).fontSize(10).fontColor(DIM)
-                }
+            Scroll() {
+              Column({ space: 1 }) {
+                ForEach(this.menus[this.openMenu].items, (it: CadMenuItem) => {
+                  Row({ space: 6 }) {
+                    Text(it.label)
+                      .fontSize(12)
+                      .fontColor(TEXT)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .layoutWeight(1)
+                    if (it.key) {
+                      Text(it.key).fontSize(10).fontColor(DIM)
+                    }
+                  }
+                  .width('100%')
+                  .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+                  .borderRadius(3)
+                  .onClick(() => this.runMenu(it.id))
+                }, (it: CadMenuItem) => `${it.id}-${it.label}`)
               }
               .width('100%')
-              .padding({ left: 10, right: 10, top: 7, bottom: 7 })
-              .borderRadius(3)
-              .onClick(() => this.runMenu(it.id))
-            }, (it: CadMenuItem) => `${it.id}-${it.label}`)
+            }
+            .scrollBar(BarState.Off)
+            .constraintSize({ maxHeight: 560 })
           }
           .width(260)
           .padding(4)
@@ -2007,6 +2085,106 @@ struct Index {
           .borderRadius(8)
           .backgroundColor(PANEL_HI)
           .position({ x: this.canvasW / 2 - 150, y: 120 })
+        }
+
+        // 标注样式面板：DIMVAR 字段读写（dimstyle / dimstyle.list）。
+        if (this.dimStyleOpen) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('rgba(0,0,0,0.4)')
+            .position({ x: 0, y: 0 })
+            .onClick(() => {
+              this.dimStyleOpen = false;
+            })
+        }
+        if (this.dimStyleOpen) {
+          Column({ space: 10 }) {
+            Text('标注样式 (DIMSTYLE)').fontSize(14).fontColor(TEXT)
+            Row({ space: 10 }) {
+              Column({ space: 4 }) {
+                Text('文字高度 DIMTXT').fontSize(10).fontColor(DIM)
+                TextInput({ text: this.dimTxt }).width(110).height(30).fontSize(12)
+                  .onChange((v: string) => { this.dimTxt = v; })
+              }
+              Column({ space: 4 }) {
+                Text('箭头大小 DIMASZ').fontSize(10).fontColor(DIM)
+                TextInput({ text: this.dimAsz }).width(110).height(30).fontSize(12)
+                  .onChange((v: string) => { this.dimAsz = v; })
+              }
+              Column({ space: 4 }) {
+                Text('全局比例 DIMSCALE 固定 1').fontSize(10).fontColor(DIM)
+                Text('1').fontSize(12).fontColor(TEXT).width(110).height(30)
+              }
+            }
+            Row({ space: 10 }) {
+              Column({ space: 4 }) {
+                Text('延伸线偏移 DIMEXO').fontSize(10).fontColor(DIM)
+                TextInput({ text: this.dimExo }).width(110).height(30).fontSize(12)
+                  .onChange((v: string) => { this.dimExo = v; })
+              }
+              Column({ space: 4 }) {
+                Text('延伸线超出 DIMEXE').fontSize(10).fontColor(DIM)
+                TextInput({ text: this.dimExe }).width(110).height(30).fontSize(12)
+                  .onChange((v: string) => { this.dimExe = v; })
+              }
+              Column({ space: 4 }) {
+                Text('文字间距 DIMGAP').fontSize(10).fontColor(DIM)
+                TextInput({ text: this.dimGap }).width(110).height(30).fontSize(12)
+                  .onChange((v: string) => { this.dimGap = v; })
+              }
+            }
+            Row({ space: 12 }) {
+              Button('保存').width(120).height(34).backgroundColor(ACCENT).fontColor('#08131c')
+                .onClick(() => this.applyDimStyle())
+              Button('取消').width(120).height(34).backgroundColor(PANEL).fontColor(TEXT)
+                .onClick(() => { this.dimStyleOpen = false; })
+            }
+          }
+          .padding(16)
+          .borderRadius(8)
+          .backgroundColor(PANEL_HI)
+          .shadow({ radius: 16, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
+          .position({ x: 250, y: 120 })
+        }
+        // 文字样式面板：字高 + 宽度因子（style / style.list）。
+        if (this.textStyleOpen) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('rgba(0,0,0,0.4)')
+            .position({ x: 0, y: 0 })
+            .onClick(() => {
+              this.textStyleOpen = false;
+            })
+        }
+        if (this.textStyleOpen) {
+          Column({ space: 10 }) {
+            Text('文字样式 (STYLE)').fontSize(14).fontColor(TEXT)
+            Row({ space: 10 }) {
+              Column({ space: 4 }) {
+                Text('固定字高 (0=按标注框)').fontSize(10).fontColor(DIM)
+                TextInput({ text: this.textHeightV }).width(140).height(30).fontSize(12)
+                  .onChange((v: string) => { this.textHeightV = v; })
+              }
+              Column({ space: 4 }) {
+                Text('宽度因子').fontSize(10).fontColor(DIM)
+                TextInput({ text: this.textWidthF }).width(140).height(30).fontSize(12)
+                  .onChange((v: string) => { this.textWidthF = v; })
+              }
+            }
+            Row({ space: 12 }) {
+              Button('保存').width(120).height(34).backgroundColor(ACCENT).fontColor('#08131c')
+                .onClick(() => this.applyTextStyle())
+              Button('取消').width(120).height(34).backgroundColor(PANEL).fontColor(TEXT)
+                .onClick(() => { this.textStyleOpen = false; })
+            }
+          }
+          .padding(16)
+          .borderRadius(8)
+          .backgroundColor(PANEL_HI)
+          .shadow({ radius: 16, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
+          .position({ x: 250, y: 160 })
         }
       }
       .width('100%')

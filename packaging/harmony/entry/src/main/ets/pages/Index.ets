@@ -17,6 +17,7 @@
 import { Cad, CadState, CadView, CadLayer, CadSel, CadMenu, CadMenuItem, CadGrip } from '../bridge/CadBridge';
 import picker from '@ohos.file.picker';
 import fs from '@ohos.file.fs';
+import util from '@ohos.util';
 import { image } from '@kit.ImageKit';
 import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -200,6 +201,9 @@ struct Index {
   private canvasH: number = 0; // vp
   private middle: MiddleDrag = new MiddleDrag();
   private frameSeq: number = 0;
+  private saveTimer: number = -1;
+  private savedEpochs: number[] = [];
+  private restoring: boolean = false;
   private lastVisible: number = -1;
   private lastTotal: number = -1;
   private lastViewH: number = 0;
@@ -242,7 +246,14 @@ struct Index {
         this.tick();
       }
     }, 100);
+    this.restoreSession();
+    this.saveTimer = setInterval(() => this.saveSession(), 30000);
     this.loadBenchmarkDrawing();
+  }
+
+  onPageHide(): void {
+    // 退后台即存：force-stop / 崩溃不丢图纸。
+    this.saveSession();
   }
 
   aboutToDisappear(): void {
@@ -250,6 +261,10 @@ struct Index {
     if (this.fallbackTimer >= 0) {
       clearInterval(this.fallbackTimer);
     }
+    if (this.saveTimer >= 0) {
+      clearInterval(this.saveTimer);
+    }
+    this.saveSession();
   }
 
   tick(): void {
@@ -847,6 +862,105 @@ struct Index {
       return;
     }
     // 空白图纸启动，和桌面版一致。不再自动加载基准图。
+  }
+
+  /** 路径存在性：fs.accessSync 对缺失路径是抛异常而不是返回 false。 */
+  private pathExists(path: string): boolean {
+    try {
+      fs.statSync(path);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** 会话自动保存：每个文档的 DXF + 活动索引，写入应用 files 目录；30 秒一次、退后台、销毁时。 */
+  saveSession(): void {
+    if (this.restoring) {
+      return;
+    }
+    try {
+      const dir: string = `${getContext(this).filesDir}/hocad-session`;
+      if (!this.pathExists(dir)) {
+        fs.mkdirSync(dir, true);
+      }
+      const st: CadState = Cad.state();
+      const docs: string[] = st.docs;
+      // 每个文档只在 epoch 变化后才重写（thunder 级图纸的 DXF 是 MB 级文本）。
+      for (let i = 0; i < docs.length; i++) {
+        if (this.savedEpochs[i] !== undefined && this.savedEpochs[i] === st.epoch) {
+          continue;
+        }
+        this.applyState(Cad.docSwitch(i));
+        const dxf: string = Cad.saveDxf();
+        const file: fs.File = fs.openSync(`${dir}/doc${i}.dxf`, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+        fs.writeSync(file.fd, dxf);
+        fs.closeSync(file);
+        this.savedEpochs[i] = st.epoch;
+      }
+      const meta: string = JSON.stringify({ 'active': st.doc, 'names': docs, 'count': docs.length });
+      const mf: fs.File = fs.openSync(`${dir}/session.json`, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      fs.writeSync(mf.fd, meta);
+      fs.closeSync(mf);
+      this.applyState(Cad.docSwitch(st.doc));
+    } catch (e) {
+      // 自动保存失败静默（磁盘满等），不打断用户。
+    }
+  }
+
+  /** 启动恢复：读回上次会话的全部文档与活动标签。 */
+  restoreSession(): void {
+    this.restoring = true;
+    try {
+      const dir: string = `${getContext(this).filesDir}/hocad-session`;
+      if (!this.pathExists(`${dir}/session.json`)) {
+        return;
+      }
+      const mf: fs.File = fs.openSync(`${dir}/session.json`, fs.OpenMode.READ_ONLY);
+      const stat: fs.Stat = fs.statSync(mf.fd);
+      const buf: ArrayBuffer = new ArrayBuffer(stat.size);
+      fs.readSync(mf.fd, buf);
+      fs.closeSync(mf);
+      const meta: Record<string, number | string[]> = JSON.parse(new util.TextDecoder().decodeToString(new Uint8Array(buf))) as Record<string, number | string[]>;
+      const names: string[] = meta['names'] as string[];
+      const count: number = meta['count'] as number;
+      const active: number = meta['active'] as number;
+      if (!names || count <= 0) {
+        return;
+      }
+      const enc = new util.TextEncoder();
+      let restored = 0;
+      for (let i = 0; i < count; i++) {
+        const path: string = `${dir}/doc${i}.dxf`;
+        if (!this.pathExists(path)) {
+          continue;
+        }
+        const f: fs.File = fs.openSync(path, fs.OpenMode.READ_ONLY);
+        const st: fs.Stat = fs.statSync(f.fd);
+        if (st.size === 0) {
+          fs.closeSync(f);
+          continue;
+        }
+        const b: ArrayBuffer = new ArrayBuffer(st.size);
+        fs.readSync(f.fd, b);
+        fs.closeSync(f);
+        const name: string = i < names.length ? names[i] : `恢复${i}`;
+        this.applyState(Cad.openDxf(name, b));
+        restored++;
+        this.savedEpochs[restored - 1] = -1;
+      }
+      if (restored > 0) {
+        // 关掉启动时的空白 Drawing1（此时它在标签 0），停在恢复的活动文档上。
+        this.applyState(Cad.docSwitch(0));
+        this.applyState(Cad.execute('close', null));
+        const idx: number = Math.max(0, Math.min(active, restored - 1));
+        this.applyState(Cad.docSwitch(idx));
+      }
+    } catch (e) {
+      // 恢复失败：按空白启动。
+    } finally {
+      this.restoring = false;
+    }
   }
 
   async saveDxf(): Promise<void> {

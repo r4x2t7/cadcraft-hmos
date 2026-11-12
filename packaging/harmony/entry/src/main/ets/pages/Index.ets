@@ -623,7 +623,7 @@ struct Index {
         }
         if (this.pendingPlace !== '') {
           // 对话框确认后：这次点击是放置点（世界坐标）。
-          const scale: number = this.canvasW / this.viewHeightW;
+          const scale: number = this.canvasH / this.viewHeightW;
           const wx: number = this.viewCenterX + (event.x - this.canvasW / 2) / scale;
           const wy: number = this.viewCenterY - (event.y - this.canvasH / 2) / scale;
           if (this.pendingPlace === 'hatch') {
@@ -684,6 +684,27 @@ struct Index {
       const t: TouchObject = event.changedTouches[0];
       const p: number[] = this.device(t.x, t.y);
       if (event.touches.length < 2) {
+        // 与鼠标路径一致：对话框确认后这次点击是放置点（世界坐标）。
+        if (this.pendingPlace === 'hatch' || this.pendingPlace === 'mtext') {
+          const wx: number = this.viewCenterX + (t.x - this.canvasW / 2) / (this.canvasH / this.viewHeightW);
+          const wy: number = this.viewCenterY - (t.y - this.canvasH / 2) / (this.canvasH / this.viewHeightW);
+          if (this.pendingPlace === 'hatch') {
+            const pp: Record<string, string | number | number[][]> = {
+              'pattern': this.hatchPattern, 'scale': Number(this.hatchScale) || 1,
+              'angle': Number(this.hatchAngle) || 0, 'points': [[wx, wy]]
+            };
+            this.applyState(Cad.execute('hatch', pp));
+          } else {
+            const hh = Number(this.mtextHeight) || 2.5;
+            const pp: Record<string, string | number | number[]> = {
+              'at': [wx, wy], 'text': this.mtextText, 'height': hh
+            };
+            this.applyState(Cad.execute('mtext', pp));
+          }
+          this.pendingPlace = '';
+          this.dirty = true;
+          return;
+        }
         // 与鼠标路径一致：空闲时点击命中夹点 → 交互 GRIP，点击确认目标点。
         if (this.hotGrip === null) {
           const g: CadGrip | null = this.gripAt(t.x, t.y);

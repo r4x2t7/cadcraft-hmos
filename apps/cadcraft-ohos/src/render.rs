@@ -58,8 +58,18 @@ pub fn frame_into(app: &mut App, out: &mut [u8]) -> usize {
     };
     // Entities whose bounds miss the view (2% slack for hairline extents) never enter the
     // display list. Skipped when the view already covers the drawing: the filter would only
-    // pay for itself.
-    let vb = raster_view.world_bounds();
+    // pay for itself. Under a view twist the on-screen world region is the screen box TURNED
+    // back into world (its axis-aligned bound is conservative for culling and hatch clipping).
+    let hw = f64::from(w) / 2.0 / scale;
+    let hh = f64::from(h) / 2.0 / scale;
+    let screen_box = Bounds2::new(center - Vec2::new(hw, hh), center + Vec2::new(hw, hh));
+    let vb = if view.twist == 0.0 {
+        screen_box
+    } else {
+        Bounds2::from_points(
+            screen_box.corners().map(|c| center + (c - center).rotate(-view.twist)),
+        )
+    };
     let slack = (vb.width() + vb.height()) * 0.02;
     let culled = Bounds2::new(vb.min - Vec2::new(slack, slack), vb.max + Vec2::new(slack, slack));
     let total = d.model.len();
@@ -71,7 +81,7 @@ pub fn frame_into(app: &mut App, out: &mut [u8]) -> usize {
     // following the cursor, drag ghosts, …) render with the frame, exactly like the
     // desktop canvas. The engine tracks the cursor via cadMove.
     let preview = app.session.preview(app.session.cursor);
-    let list = if covers_drawing {
+    let mut list = if covers_drawing {
         app.last_visible = total;
         cadcraft_render::build_entities(
             d,
@@ -89,6 +99,20 @@ pub fn frame_into(app: &mut App, out: &mut [u8]) -> usize {
         app.last_visible = visible.len();
         cadcraft_render::build_entities(d, visible, &opts)
     };
+    // The CPU raster has no twist in its View: turn the built list about the view centre
+    // instead, so its plain unturned render matches the desktop's turned screen frame
+    // (screen = R(twist)·(p − centre)·scale). Glyphs are tessellated into verts/tris by the
+    // pipeline, so rotating the two point arrays covers everything the raster draws; raster
+    // image underlays (DImage placement) would need their own transform — rare, and none
+    // until an upstream raster::View::twist exists.
+    if view.twist != 0.0 {
+        for v in &mut list.verts {
+            *v = center + (*v - center).rotate(view.twist);
+        }
+        for v in &mut list.tris {
+            *v = center + (*v - center).rotate(view.twist);
+        }
+    }
     drop(d);
     drop(preview);
     let build_ms = build_started.elapsed().as_secs_f64() * 1000.0;

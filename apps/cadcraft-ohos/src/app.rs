@@ -60,13 +60,18 @@ impl App {
         self.session.state().map(|st| st.view()).unwrap_or_default()
     }
 
-    /// Device px on the canvas → world coordinates (y up, centre of the view fixed).
+    /// Device px on the canvas → world coordinates (y up, centre of the view fixed). A view
+    /// twist (DVIEW/ViewCube, upstream v0.20) turns the drawing on screen: the screen offset
+    /// from the centre is un-turned before the world offset is added.
     pub fn to_world(&self, x: f64, y: f64) -> Vec2 {
         let view = self.engine_view();
         let scale = self.scale();
-        let wx = view.center.x + (x - f64::from(self.width) / 2.0) / scale;
-        let wy = view.center.y + (f64::from(self.height) / 2.0 - y) / scale;
-        Vec2::new(wx, wy)
+        let d = Vec2::new(
+            (x - f64::from(self.width) / 2.0) / scale,
+            (f64::from(self.height) / 2.0 - y) / scale,
+        );
+        let d = if view.twist == 0.0 { d } else { d.rotate(-view.twist) };
+        view.center + d
     }
 
     /// The JSON reply every interaction returns: `cadState` plus any extra field, so the
@@ -132,13 +137,13 @@ impl App {
         let w1 = self.to_world(x1, y1);
         let w2 = self.to_world(x2, y2);
         let center = Vec2::new((w1.x + w2.x) / 2.0, (w1.y + w2.y) / 2.0);
-        let h = (w2.y - w1.y).abs().max(1e-9);
         let aspect = f64::from(self.width) / f64::from(self.height).max(1.0);
-        let height = h.max(h * aspect / (h / h)).max(1e-9);
-        // Use the larger dimension for the view height to fit the window.
-        let hh = h.max((w2.x - w1.x).abs() / aspect.max(0.01)).max(1e-9) * 1.05;
+        // Use the larger dimension for the view height to fit the window; a twist keeps
+        // turning (the window was picked in the turned screen frame already).
+        let hh = ((w2.y - w1.y).abs().max((w2.x - w1.x).abs() / aspect.max(0.01)).max(1e-9)) * 1.05;
+        let view = self.engine_view();
         if let Ok(st) = self.session.state_mut() {
-            st.set_view_quiet(cadcraft_engine::View { center, height: hh });
+            st.set_view_quiet(cadcraft_engine::View { center, height: hh, twist: view.twist });
         }
         self.state_json()
     }
@@ -370,12 +375,10 @@ impl App {
             return;
         }
         let view = self.engine_view();
-        let center = Vec2::new(
-            view.center.x - dx_px / scale,
-            view.center.y + dy_px / scale,
-        );
+        let d = Vec2::new(-dx_px / scale, dy_px / scale);
+        let d = if view.twist == 0.0 { d } else { d.rotate(-view.twist) };
         if let Ok(st) = self.session.state_mut() {
-            st.set_view_quiet(EngineView { center, height: view.height });
+            st.set_view_quiet(EngineView { center: view.center + d, height: view.height, twist: view.twist });
         }
     }
 

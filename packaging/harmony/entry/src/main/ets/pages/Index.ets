@@ -483,7 +483,8 @@ struct Index {
       this.ovlCtx.setLineDash([]);
     }
     // 夹点：桌面同款蓝色方块，热夹点实心红；命中半径与 gripAt 的 12vp 一致。
-    if (this.grips.length > 0 && this.viewHeightW > 0 && this.canvasH > 0) {
+    // 命令运行中（提示非空）不画夹点——桌面在命令的选择阶段也不显示夹点。
+    if (this.grips.length > 0 && this.prompt.length === 0 && this.viewHeightW > 0 && this.canvasH > 0) {
       const gs: number = this.canvasH / this.viewHeightW;
       const half: number = 5;
       for (const g of this.grips) {
@@ -646,7 +647,8 @@ struct Index {
           return;
         }
         // 夹点流：空闲点击命中夹点 → 交互 GRIP（橡皮筋跟手，点击确认，Space 翻模式）。
-        if (this.hotGrip === null) {
+        // 仅空闲（无运行中命令）时抓夹点：命令的选择阶段点击必须到达命令本身。
+        if (this.hotGrip === null && this.prompt.length === 0) {
           const g = this.gripAt(event.x, event.y);
           if (g !== null) {
             this.hotGrip = g;
@@ -706,7 +708,7 @@ struct Index {
           return;
         }
         // 与鼠标路径一致：空闲时点击命中夹点 → 交互 GRIP，点击确认目标点。
-        if (this.hotGrip === null) {
+        if (this.hotGrip === null && this.prompt.length === 0) {
           const g: CadGrip | null = this.gripAt(t.x, t.y);
           if (g !== null) {
             this.hotGrip = g;
@@ -1648,6 +1650,7 @@ struct Index {
           Column()
             .width('100%')
             .height('100%')
+              .position({ x: 0, y: 0 }) // height('100%') 的流内兄弟会吃光纵向空间，压塌 layoutWeight(1) 主行
             .onClick(() => {
               this.openMenu = -1;
             })
@@ -1697,6 +1700,8 @@ struct Index {
           Column()
             .width('100%')
             .height('100%')
+              // height('100%') 的流内兄弟会吃光纵向空间，把 layoutWeight(1) 主行压成零高
+              .position({ x: 0, y: 0 })
             .onClick(() => {
               this.ctxOpen = false;
             })
@@ -1720,7 +1725,7 @@ struct Index {
           .borderRadius(6)
           .backgroundColor(PANEL_HI)
           .shadow({ radius: 12, color: 'rgba(0,0,0,0.5)', offsetY: 4 })
-          .position({ x: 100, y: 120 })
+          .position({ x: 700, y: 190 })
         }
 
         // 新建图层弹窗。
@@ -1729,6 +1734,8 @@ struct Index {
             .width('100%')
             .height('100%')
             .backgroundColor('rgba(0,0,0,0.4)')
+            // 遮罩移出 Column 纵向流，避免吃光 layoutWeight(1) 主行的高度
+            .position({ x: 0, y: 0 })
             .onClick(() => {
               this.layerNewOpen = false;
             })
@@ -1777,6 +1784,8 @@ struct Index {
             .width('100%')
             .height('100%')
             .backgroundColor('rgba(0,0,0,0.4)')
+            // 遮罩移出 Column 纵向流，避免吃光 layoutWeight(1) 主行的高度
+            .position({ x: 0, y: 0 })
             .onClick(() => {
               this.hatchOpen = false;
             })
@@ -1842,6 +1851,8 @@ struct Index {
             .width('100%')
             .height('100%')
             .backgroundColor('rgba(0,0,0,0.4)')
+            // 遮罩移出 Column 纵向流，避免吃光 layoutWeight(1) 主行的高度
+            .position({ x: 0, y: 0 })
             .onClick(() => {
               this.mtextOpen = false;
             })

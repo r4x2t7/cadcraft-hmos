@@ -766,9 +766,11 @@ struct Index {
       this.applyState(Cad.enter());
       this.dirty = true;
     } else if (this.ctrlHeld && event.keyCode === KeyCode.KEYCODE_Z) {
-      this.keyword('undo');
+      this.applyState(Cad.execute('undo', { 'count': 1 }));
+      this.dirty = true;
     } else if (this.ctrlHeld && event.keyCode === KeyCode.KEYCODE_Y) {
-      this.keyword('redo');
+      this.applyState(Cad.execute('redo', { 'count': 1 }));
+      this.dirty = true;
     } else if (event.keyCode === KeyCode.KEYCODE_PLUS || event.keyCode === KeyCode.KEYCODE_NUMPAD_ADD) {
       const p: number[] = this.device(this.canvasW / 2, this.canvasH / 2);
       this.applyState(Cad.zoom(1.25, p[0], p[1]));
@@ -983,8 +985,8 @@ struct Index {
         this.applyState(Cad.zoomExtents());
         this.dirty = true;
       })
-      MenuItem({ content: '撤销 (Ctrl+Z)' }).onClick(() => this.keyword('undo'))
-      MenuItem({ content: '重做 (Ctrl+Y)' }).onClick(() => this.keyword('redo'))
+      MenuItem({ content: '撤销 (Ctrl+Z)' }).onClick(() => { this.applyState(Cad.execute('undo', { 'count': 1 })); this.dirty = true; })
+      MenuItem({ content: '重做 (Ctrl+Y)' }).onClick(() => { this.applyState(Cad.execute('redo', { 'count': 1 })); this.dirty = true; })
       MenuItem({ content: '画直线 (LINE)' }).onClick(() => this.startCommand('line'))
       MenuItem({ content: '画圆 (CIRCLE)' }).onClick(() => this.startCommand('circle'))
       MenuItem({ content: this.selection.length > 0 ? '删除选中 (ERASE)' : '删除 (ERASE)' }).onClick(() => {
@@ -1055,9 +1057,11 @@ struct Index {
     } else if (id === 'print') {
       this.printView();
     } else if (id === 'undo') {
-      this.keyword('undo');
+      this.applyState(Cad.execute('undo', { 'count': 1 }));
+      this.dirty = true;
     } else if (id === 'redo') {
-      this.keyword('redo');
+      this.applyState(Cad.execute('redo', { 'count': 1 }));
+      this.dirty = true;
     } else if (id === 'zoomextents') {
       this.applyState(Cad.zoomExtents());
       this.dirty = true;
